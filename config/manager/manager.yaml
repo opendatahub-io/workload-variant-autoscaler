@@ -62,6 +62,8 @@ spec:
         args:
           - --leader-elect=true
           - --health-probe-bind-address=:8081
+          # set watch-namespace explicitly to empty string for consistent behaviour because of diverging defaults between upstream and midstream/downstream
+          - --watch-namespace=
           # Leader election timeout configuration (optional - defaults shown below)
           # Uncomment and adjust these values if you need to tune for your environment:
           # - --leader-election-lease-duration=60s
