@@ -176,6 +176,10 @@ Configuration is resolved in the following order (highest to lowest priority):
 2. **Global ConfigMap** (in controller namespace)
 3. **Controller defaults**
 
+### Required Label
+
+All WVA ConfigMaps (both global and namespace-local) **must** have the `wva.llmd.ai/config: "true"` label. The controller uses this label to filter ConfigMaps at the cache level, so ConfigMaps without it will not be visible to the controller.
+
 ### Example: Namespace-Local Saturation Config
 
 ```yaml
@@ -184,6 +188,8 @@ kind: ConfigMap
 metadata:
   name: wva-saturation-config
   namespace: my-namespace
+  labels:
+    wva.llmd.ai/config: "true"
 data:
   default: |
     kvCacheThreshold: 0.85

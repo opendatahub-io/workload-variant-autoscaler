@@ -14,6 +14,16 @@ const (
 	// even if no VariantAutoscaling resources exist in that namespace yet.
 	// This enables creating namespace-local ConfigMaps before VAs are created, avoiding race conditions.
 	NamespaceConfigEnabledLabelKey = "wva.llmd.ai/config-enabled"
+
+	// ConfigLabelKey is the label key used to identify WVA-managed ConfigMaps.
+	// Only ConfigMaps with this label set to ConfigLabelValue are cached by the controller,
+	// preventing the controller-runtime cache from storing every ConfigMap in the cluster.
+	// This label must be present on all WVA well-known ConfigMaps and any user-created
+	// namespace-local ConfigMap overrides.
+	ConfigLabelKey = "wva.llmd.ai/config"
+
+	// ConfigLabelValue is the expected value for ConfigLabelKey.
+	ConfigLabelValue = "true"
 )
 
 // Kubernetes Annotation Keys

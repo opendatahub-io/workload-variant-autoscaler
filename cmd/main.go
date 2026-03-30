@@ -44,10 +44,15 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
@@ -286,15 +291,30 @@ func main() {
 		LeaderElectionReleaseOnCancel: true,
 	}
 
+	// Configure cache-level label selector for ConfigMaps to avoid caching every
+	// ConfigMap in the cluster. Only ConfigMaps with the wva.llmd.ai/config label
+	// are synced into the informer cache, dramatically reducing memory usage on
+	// large clusters. The predicate in ConfigMapReconciler provides additional
+	// name-based filtering as defense-in-depth.
+	configMapSelector := labels.SelectorFromSet(labels.Set{
+		constants.ConfigLabelKey: constants.ConfigLabelValue,
+	})
+	cacheOpts := cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}: {
+				Label: configMapSelector,
+			},
+		},
+	}
+
 	watchNS := cfg.WatchNamespace()
 	if watchNS != "" {
 		setupLog.Info("Watching single namespace", "namespace", watchNS)
-		mgrOptions.Cache = cache.Options{
-			DefaultNamespaces: map[string]cache.Config{
-				watchNS: {},
-			},
+		cacheOpts.DefaultNamespaces = map[string]cache.Config{
+			watchNS: {},
 		}
 	}
+	mgrOptions.Cache = cacheOpts
 
 	mgr, err := ctrl.NewManager(restConfig, mgrOptions)
 	if err != nil {
