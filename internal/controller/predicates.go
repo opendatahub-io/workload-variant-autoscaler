@@ -34,9 +34,8 @@ func ConfigMapPredicate(ds datastore.Datastore, cfg *config.Config) predicate.Pr
 		namespace := obj.GetNamespace()
 		systemNamespace := config.SystemNamespace()
 
-		// Well-known ConfigMap names
+		// Well-known ConfigMap names that have reconcile handlers
 		wellKnownNames := map[string]bool{
-			config.ConfigMapName():                 true,
 			config.SaturationConfigMapName():       true,
 			config.DefaultScaleToZeroConfigMapName: true,
 			config.QMAnalyzerConfigMapName():       true,

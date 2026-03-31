@@ -112,7 +112,6 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	wellKnownNames := []string{
-		config.ConfigMapName(),
 		config.SaturationConfigMapName(),
 		config.DefaultScaleToZeroConfigMapName,
 		config.QMAnalyzerConfigMapName(),
