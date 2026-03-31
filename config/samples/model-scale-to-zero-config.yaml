@@ -22,8 +22,6 @@ kind: ConfigMap
 metadata:
   name: wva-model-scale-to-zero-config
   namespace: workload-variant-autoscaler-system
-  labels:
-    wva.llmd.ai/config: "true"
 data:
   # Global defaults applied to all models unless overridden
   default: |

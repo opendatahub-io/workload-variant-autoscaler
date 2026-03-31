@@ -13,7 +13,6 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize
-    wva.llmd.ai/config: "true"
   annotations:
     opendatahub.io/managed: "false" 
 data:

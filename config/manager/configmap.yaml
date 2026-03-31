@@ -6,7 +6,6 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize
-    wva.llmd.ai/config: "true"
 data:
   # Prometheus configuration - REQUIRED: Set your Prometheus server URL
   # Examples:

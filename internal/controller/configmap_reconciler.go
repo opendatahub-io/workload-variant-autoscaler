@@ -18,14 +18,22 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
@@ -92,11 +100,60 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // SetupWithManager sets up the controller with the Manager.
+// Instead of watching all ConfigMaps and filtering with predicates + cache-level
+// label selectors, this creates a dedicated informer per well-known ConfigMap name.
+// Each informer uses a server-side field selector (metadata.name=<name>) so only
+// matching objects are sent over the wire, avoiding the need for labels on ConfigMaps
+// and preventing the controller from caching every ConfigMap in the cluster.
 func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.ConfigMap{}).
-		WithEventFilter(ConfigMapPredicate(r.Datastore, r.Config)).
-		Complete(r)
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("creating clientset for ConfigMap informers: %w", err)
+	}
+
+	wellKnownNames := []string{
+		config.ConfigMapName(),
+		config.SaturationConfigMapName(),
+		config.DefaultScaleToZeroConfigMapName,
+		config.QMAnalyzerConfigMapName(),
+	}
+
+	bldr := ctrl.NewControllerManagedBy(mgr).
+		Named("configmap").
+		WithEventFilter(ConfigMapPredicate(r.Datastore, r.Config))
+
+	for _, name := range wellKnownNames {
+		cmName := name // capture loop variable
+		lw := toolscache.NewFilteredListWatchFromClient(
+			clientset.CoreV1().RESTClient(),
+			"configmaps",
+			metav1.NamespaceAll,
+			func(options *metav1.ListOptions) {
+				options.FieldSelector = fields.OneTermEqualSelector("metadata.name", cmName).String()
+			},
+		)
+
+		informer := toolscache.NewSharedIndexInformer(
+			lw,
+			&corev1.ConfigMap{},
+			0,
+			toolscache.Indexers{},
+		)
+
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			informer.Run(ctx.Done())
+			return nil
+		})); err != nil {
+			return fmt.Errorf("registering informer for ConfigMap %q: %w", cmName, err)
+		}
+
+		bldr.WatchesRawSource(&source.Informer{
+			Informer: informer,
+			Handler:  &handler.EnqueueRequestForObject{},
+		})
+	}
+
+	return bldr.Complete(r)
 }
 
 // handleConfigMapDeletion handles ConfigMap deletion events.

@@ -3,8 +3,6 @@ kind: ConfigMap
 metadata:
   name: wva-variantautoscaling-config
   namespace: workload-variant-autoscaler-system
-  labels:
-    wva.llmd.ai/config: "true"
 data:
   # OpenShift Prometheus configuration
   PROMETHEUS_BASE_URL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
