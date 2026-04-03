@@ -116,6 +116,12 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		config.QMAnalyzerConfigMapName(),
 	}
 
+	// Scope informers to the watch namespace if set, otherwise watch all namespaces.
+	watchNS := r.Config.WatchNamespace()
+	if watchNS == "" {
+		watchNS = metav1.NamespaceAll
+	}
+
 	bldr := ctrl.NewControllerManagedBy(mgr).
 		Named("configmap").
 		WithEventFilter(ConfigMapPredicate(r.Datastore, r.Config))
@@ -125,7 +131,7 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		lw := toolscache.NewFilteredListWatchFromClient(
 			clientset.CoreV1().RESTClient(),
 			"configmaps",
-			metav1.NamespaceAll,
+			watchNS,
 			func(options *metav1.ListOptions) {
 				options.FieldSelector = fields.OneTermEqualSelector("metadata.name", cmName).String()
 			},
