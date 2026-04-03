@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -128,9 +129,10 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}
 
+	cmPredicate := ConfigMapPredicate(r.Datastore, r.Config)
+
 	bldr := ctrl.NewControllerManagedBy(mgr).
-		Named("configmap").
-		WithEventFilter(ConfigMapPredicate(r.Datastore, r.Config))
+		Named("configmap")
 
 	for _, name := range wellKnownNames {
 		for _, ns := range watchNamespaces {
@@ -155,9 +157,13 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return fmt.Errorf("registering informer for ConfigMap %q in namespace %q: %w", cmName, ns, err)
 			}
 
+			// Predicates must be passed directly to the source because
+			// WithEventFilter (globalPredicates) does not apply to raw sources
+			// in controller-runtime v0.22.5.
 			bldr.WatchesRawSource(&source.Informer{
-				Informer: informer,
-				Handler:  &handler.EnqueueRequestForObject{},
+				Informer:   informer,
+				Handler:    &handler.EnqueueRequestForObject{},
+				Predicates: []predicate.Predicate{cmPredicate},
 			})
 		}
 	}
