@@ -32,7 +32,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -139,10 +138,7 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			toolscache.Indexers{},
 		)
 
-		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-			informer.Run(ctx.Done())
-			return nil
-		})); err != nil {
+		if err := mgr.Add(&informerRunnable{informer: informer}); err != nil {
 			return fmt.Errorf("registering informer for ConfigMap %q: %w", cmName, err)
 		}
 
@@ -270,4 +266,24 @@ func (r *ConfigMapReconciler) handleQMAnalyzerConfigMap(ctx context.Context, cm 
 		r.Config.UpdateQMAnalyzerConfigForNamespace(namespace, configs)
 		logger.Info("Updated namespace-local queueing model config from ConfigMap", "namespace", namespace, "entries", count)
 	}
+}
+
+// informerRunnable wraps a SharedIndexInformer so it starts in the "Others"
+// runnable group (NeedLeaderElection=false), which the manager starts before
+// the LeaderElection group where controllers live. This ensures informer.Run()
+// is called before source.Informer.Start() calls WaitForCacheSync.
+type informerRunnable struct {
+	informer toolscache.SharedIndexInformer
+}
+
+// Start runs the informer until the context is cancelled.
+func (ir *informerRunnable) Start(ctx context.Context) error {
+	ir.informer.Run(ctx.Done())
+	return nil
+}
+
+// NeedLeaderElection returns false so the manager places this runnable in the
+// "Others" group, which starts before the LeaderElection group (controllers).
+func (ir *informerRunnable) NeedLeaderElection() bool {
+	return false
 }
