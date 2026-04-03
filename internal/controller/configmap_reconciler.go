@@ -116,10 +116,16 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		config.QMAnalyzerConfigMapName(),
 	}
 
-	// Scope informers to the watch namespace if set, otherwise watch all namespaces.
-	watchNS := r.Config.WatchNamespace()
-	if watchNS == "" {
-		watchNS = metav1.NamespaceAll
+	// Determine which namespaces to watch for ConfigMaps.
+	// In single-namespace mode, watch both the target namespace and the system
+	// namespace (where global ConfigMaps live). In multi-namespace mode, watch
+	// all namespaces.
+	watchNamespaces := []string{metav1.NamespaceAll}
+	if ns := r.Config.WatchNamespace(); ns != "" {
+		watchNamespaces = []string{ns}
+		if sysNS := config.SystemNamespace(); sysNS != ns {
+			watchNamespaces = append(watchNamespaces, sysNS)
+		}
 	}
 
 	bldr := ctrl.NewControllerManagedBy(mgr).
@@ -127,31 +133,33 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(ConfigMapPredicate(r.Datastore, r.Config))
 
 	for _, name := range wellKnownNames {
-		cmName := name // capture loop variable
-		lw := toolscache.NewFilteredListWatchFromClient(
-			clientset.CoreV1().RESTClient(),
-			"configmaps",
-			watchNS,
-			func(options *metav1.ListOptions) {
-				options.FieldSelector = fields.OneTermEqualSelector("metadata.name", cmName).String()
-			},
-		)
+		for _, ns := range watchNamespaces {
+			cmName := name // capture loop variable
+			lw := toolscache.NewFilteredListWatchFromClient(
+				clientset.CoreV1().RESTClient(),
+				"configmaps",
+				ns,
+				func(options *metav1.ListOptions) {
+					options.FieldSelector = fields.OneTermEqualSelector("metadata.name", cmName).String()
+				},
+			)
 
-		informer := toolscache.NewSharedIndexInformer(
-			lw,
-			&corev1.ConfigMap{},
-			0,
-			toolscache.Indexers{},
-		)
+			informer := toolscache.NewSharedIndexInformer(
+				lw,
+				&corev1.ConfigMap{},
+				0,
+				toolscache.Indexers{},
+			)
 
-		if err := mgr.Add(&informerRunnable{informer: informer}); err != nil {
-			return fmt.Errorf("registering informer for ConfigMap %q: %w", cmName, err)
+			if err := mgr.Add(&informerRunnable{informer: informer}); err != nil {
+				return fmt.Errorf("registering informer for ConfigMap %q in namespace %q: %w", cmName, ns, err)
+			}
+
+			bldr.WatchesRawSource(&source.Informer{
+				Informer: informer,
+				Handler:  &handler.EnqueueRequestForObject{},
+			})
 		}
-
-		bldr.WatchesRawSource(&source.Informer{
-			Informer: informer,
-			Handler:  &handler.EnqueueRequestForObject{},
-		})
 	}
 
 	return bldr.Complete(r)
