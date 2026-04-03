@@ -869,8 +869,8 @@ func LogVariantAutoscalingStatus(ctx context.Context, vaName, namespace string, 
 	return nil
 }
 
-// creates a VariantAutoscaling resource with owner reference to deployment
-func CreateVariantAutoscalingResource(namespace, resourceName, scaleTargetRefName, modelId, acc string, variantCost float64) *v1alpha1.VariantAutoscaling {
+// CreateVariantAutoscalingResource creates a VariantAutoscaling resource for unit tests.
+func CreateVariantAutoscalingResource(namespace, resourceName, scaleTargetRefName, modelId, acc string, cost float64) *v1alpha1.VariantAutoscaling {
 	return &v1alpha1.VariantAutoscaling{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      resourceName,
@@ -885,8 +885,10 @@ func CreateVariantAutoscalingResource(namespace, resourceName, scaleTargetRefNam
 				Kind:       "Deployment",
 				Name:       scaleTargetRefName,
 			},
-			ModelID:     modelId,
-			VariantCost: fmt.Sprintf("%.1f", variantCost),
+			ModelID: modelId,
+			VariantAutoscalingConfigSpec: v1alpha1.VariantAutoscalingConfigSpec{
+				VariantCost: fmt.Sprintf("%.1f", cost),
+			},
 		},
 	}
 }

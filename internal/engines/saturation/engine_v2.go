@@ -115,7 +115,7 @@ func (e *Engine) runAnalyzersAndScore(
 		switch aw.Name {
 		case "saturation":
 			totalWeighted += baseResult.RequiredCapacity * aw.Score
-		// future: case "throughput", "slo"
+			// future: case "throughput", "slo"
 		}
 	}
 
