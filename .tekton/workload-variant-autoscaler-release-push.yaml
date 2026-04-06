@@ -23,7 +23,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/workload-variant-autoscaler:v0.7.0
+    value: quay.io/opendatahub/workload-variant-autoscaler:v0.6.0
   - name: dockerfile
     value: Dockerfile
   - name: path-context
