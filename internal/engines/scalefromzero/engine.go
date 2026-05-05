@@ -71,7 +71,7 @@ type Engine struct {
 // cfg must be non-nil (validated in main.go before engine creation).
 func NewEngine(client client.Client, mapper meta.RESTMapper, restConfig *rest.Config, ds datastore.Datastore, cfg *config.Config) (*Engine, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("config is nil in NewEngine - this should not happen")
+		return nil, errors.New("config is nil in NewEngine - this should not happen")
 	}
 
 	maxConcurrency := cfg.ScaleFromZeroMaxConcurrency()
@@ -382,7 +382,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		wvav1alpha1.TypeOptimizationReady,
 		metav1.ConditionTrue,
 		"ScaleFromZeroMode",
-		fmt.Sprintf("scalefromzero decision: %s", reason))
+		"scalefromzero decision: "+reason)
 
 	va.Status.Actuation.Applied = true
 

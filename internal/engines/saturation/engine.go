@@ -43,6 +43,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -180,7 +181,18 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 }
 
 // optimize performs the optimization logic.
-func (e *Engine) optimize(ctx context.Context) error {
+func (e *Engine) optimize(ctx context.Context) (retErr error) {
+	start := time.Now()
+	var modelsProcessed int
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ObserveOptimizationDuration(time.Since(start).Seconds(), status)
+		metrics.SetModelsProcessed(modelsProcessed)
+	}()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Get optimization interval from Config (already a time.Duration)
@@ -225,6 +237,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 
 	// Group VAs by model for per-model capacity analysis
 	modelGroups := utils.GroupVariantAutoscalingByModel(activeVAs)
+	modelsProcessed = len(modelGroups)
 	logger.Info("Grouped VAs by model",
 		"modelCount", len(modelGroups),
 		"totalVAs", len(activeVAs))
@@ -265,7 +278,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
-	if analyzerName == "saturation" || analyzerName == interfaces.QueueingModelAnalyzerName {
+	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
 		if enableLimiter {
 			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
 		} else {
@@ -286,7 +299,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 	switch analyzerName {
 	case interfaces.QueueingModelAnalyzerName:
 		allDecisions = e.optimizeQueueingModel(ctx, modelGroups, currentAllocations)
-	case "saturation":
+	case interfaces.SaturationAnalyzerName:
 		allDecisions = e.optimizeV2(ctx, modelGroups, currentAllocations)
 	default:
 		allDecisions = e.optimizeV1(ctx, modelGroups, currentAllocations)
@@ -302,10 +315,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 	} else {
 		logger.Info("No scaling decisions to apply, updating VA status with metrics")
 	}
-	if err := e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations); err != nil {
-		logger.Error(err, "Failed to apply saturation decisions")
-		return err
-	}
+	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations)
 
 	logger.Info("Optimization completed successfully",
 		"mode", "saturation-only",
@@ -617,17 +627,16 @@ func (e *Engine) BuildVariantStates(
 // getRoleFromScaleTarget extracts the P/D role from a scale target's pod template labels.
 // Returns "prefill", "decode", or "both" (default when no role label is present).
 func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string {
-	both := "both"
 	if scaleTarget == nil {
-		return both
+		return interfaces.RoleBoth
 	}
 	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
 	if podTemplateSpec == nil {
-		return both
+		return interfaces.RoleBoth
 	}
 	labels := podTemplateSpec.Labels
 	if labels == nil {
-		return both
+		return interfaces.RoleBoth
 	}
 	if val, ok := labels["llm-d.ai/role"]; ok {
 		switch val {
@@ -636,10 +645,10 @@ func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string 
 		case "decode":
 			return "decode"
 		default:
-			return "both"
+			return interfaces.RoleBoth
 		}
 	}
-	return both
+	return interfaces.RoleBoth
 }
 
 // convertSaturationTargetsToDecisions converts saturation-only targets to VariantDecisions.
@@ -671,11 +680,12 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 		va := vaMap[variantName]
 
 		var action interfaces.SaturationAction
-		if targetReplicas > state.CurrentReplicas {
+		switch {
+		case targetReplicas > state.CurrentReplicas:
 			action = interfaces.ActionScaleUp
-		} else if targetReplicas < state.CurrentReplicas {
+		case targetReplicas < state.CurrentReplicas:
 			action = interfaces.ActionScaleDown
-		} else {
+		default:
 			action = interfaces.ActionNoChange
 		}
 
@@ -830,12 +840,12 @@ func (e *Engine) RunSaturationAnalysis(
 	ctx context.Context,
 	modelID string,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	SaturationConfig config.SaturationScalingConfig,
+	saturationConfig config.SaturationScalingConfig,
 	k8sClient client.Client,
 ) (map[string]int, *interfaces.ModelSaturationAnalysis, *modelData, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
-	SaturationConfig.ApplyDefaults()
+	saturationConfig.ApplyDefaults()
 
 	data, err := e.prepareModelData(ctx, modelID, modelVAs, k8sClient)
 	if err != nil {
@@ -846,7 +856,7 @@ func (e *Engine) RunSaturationAnalysis(
 	}
 
 	saturationAnalyzer := saturation.NewAnalyzer()
-	saturationAnalysis, err := saturationAnalyzer.AnalyzeModelSaturation(ctx, modelID, data.namespace, data.replicaMetrics, SaturationConfig)
+	saturationAnalysis, err := saturationAnalyzer.AnalyzeModelSaturation(ctx, modelID, data.namespace, data.replicaMetrics, saturationConfig)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to analyze Saturation for model %s: %w", modelID, err)
 	}
@@ -876,7 +886,7 @@ func (e *Engine) applySaturationDecisions(
 	decisions []interfaces.VariantDecision,
 	vaMap map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	currentAllocations map[string]*interfaces.Allocation,
-) error {
+) {
 	logger := ctrl.LoggerFrom(ctx)
 	// Create a map of decisions for O(1) lookup
 	// Use namespace/variantName as key to match vaMap and avoid collisions
@@ -1004,19 +1014,20 @@ func (e *Engine) applySaturationDecisions(
 
 		// Set condition based on decision characteristics (or lack thereof)
 		if hasDecision {
-			if decision.SafetyOverride {
+			switch {
+			case decision.SafetyOverride:
 				llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
 					llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
 					metav1.ConditionTrue,
 					"SaturationSafetyOverride",
-					fmt.Sprintf("saturation safety override: %s", reason))
-			} else if decision.SaturationOnly {
+					"saturation safety override: "+reason)
+			case decision.SaturationOnly:
 				llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
 					llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
 					metav1.ConditionTrue,
 					"SaturationOnlyMode",
 					fmt.Sprintf("saturation-only decision: %s (target: %d replicas)", reason, targetReplicas))
-			} else {
+			default:
 				llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
 					llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
 					metav1.ConditionTrue,
@@ -1106,8 +1117,6 @@ func (e *Engine) applySaturationDecisions(
 				"reason", reason)
 		}
 	}
-
-	return nil
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
@@ -1132,7 +1141,7 @@ func (e *Engine) emitSafetyNetMetrics(
 				// Get current replicas for metric emission.
 				currentReplicas, err = act.GetCurrentScaleTargetReplicasFromScaleTarget(&va, scaleTarget)
 				if err != nil {
-					logger.Error(err, "Safety net: failed to get current replicas from scale target for metrics", "using cached allocation",
+					logger.Error(err, "Safety net: failed to get current replicas from scale target for metrics, using cached allocation",
 						"variant", va.Name)
 					if curr, ok := currentAllocations[utils.GetNamespacedKey(va.Namespace, va.Name)]; ok {
 						currentReplicas = int32(curr.NumReplicas)

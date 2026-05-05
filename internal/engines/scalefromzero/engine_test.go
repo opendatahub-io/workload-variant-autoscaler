@@ -483,13 +483,11 @@ func TestNamespacedMetricsSourceLookup(t *testing.T) {
 			if tt.expectSkip {
 				// When pool is not found (different namespace), we expect nil error (skip)
 				assert.NoError(t, err, "Expected no error (skip) for: %s, but got: %v", tt.skipReason, err)
-			} else {
+			} else if err != nil && errors.Is(err, datastore.ErrPoolNotSynced) {
 				// When pool is found, we expect it to proceed
 				// It may error on EPP metrics refresh (which is expected in test environment)
 				// but it should NOT error on "pool not found"
-				if err != nil && errors.Is(err, datastore.ErrPoolNotSynced) {
-					t.Errorf("Should have found pool in same namespace, but got: %v", err)
-				}
+				t.Errorf("Should have found pool in same namespace, but got: %v", err)
 			}
 		})
 	}

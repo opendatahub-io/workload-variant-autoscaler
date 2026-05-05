@@ -46,7 +46,6 @@ func TestQueryPrometheusWithBackoff(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			mock := &testutils.MockPromAPI{
 				QueryResults: map[string]model.Value{
@@ -319,7 +318,6 @@ func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -20,7 +19,7 @@ import (
 //
 // Note: On Kind clusters, pod IPs are not routable from outside the cluster, so direct
 // scraping tests are skipped. In-cluster scraping tests still run to verify functionality.
-var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
+var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, func() {
 	var (
 		poolName          = "pod-scraping-pool"
 		modelServiceName  = "pod-scraping-ms"
@@ -53,7 +52,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 		// Discover existing EPP services dynamically (like legacy tests)
 		// EPP service name follows pattern: {poolName}-epp
 		// First try the expected pool name, then discover any existing EPP service
-		expectedEPPName := fmt.Sprintf("%s-epp", poolName)
+		expectedEPPName := poolName + "-epp"
 
 		// Verify EPP service exists (either the expected one or discover an existing one)
 		Eventually(func(g Gomega) {

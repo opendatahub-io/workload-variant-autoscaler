@@ -48,7 +48,7 @@ func UpdateStatusWithBackoff[T client.Object](ctx context.Context, c client.Clie
 		err := c.Status().Update(ctx, obj)
 		if err != nil {
 			if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
-				ctrl.LoggerFrom(ctx).V(logging.VERBOSE).Error(err, "permanent error updating status for resource ", resourceType, ", name: ", obj.GetName())
+				ctrl.LoggerFrom(ctx).V(logging.VERBOSE).Error(err, "permanent error updating status for resource", "resourceType", resourceType, "name", obj.GetName())
 				return false, err // Don't retry on permanent errors
 			}
 			if apierrors.IsConflict(err) {
@@ -56,7 +56,7 @@ func UpdateStatusWithBackoff[T client.Object](ctx context.Context, c client.Clie
 				ctrl.LoggerFrom(ctx).V(logging.TRACE).Info("conflict updating status (resource version mismatch), retrying", "resource", resourceType, "name", obj.GetName())
 				return false, nil // Retry on conflict
 			}
-			ctrl.LoggerFrom(ctx).V(logging.TRACE).Error(err, "transient error updating status, retrying for resource ", resourceType, ", name: ", obj.GetName())
+			ctrl.LoggerFrom(ctx).V(logging.TRACE).Error(err, "transient error updating status, retrying for resource", "resourceType", resourceType, "name", obj.GetName())
 			return false, nil // Retry on transient errors
 		}
 		return true, nil

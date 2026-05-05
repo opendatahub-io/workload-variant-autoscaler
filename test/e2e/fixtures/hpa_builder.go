@@ -14,6 +14,13 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	kindLeaderWorkerSet = "LeaderWorkerSet"
+	kindDeployment      = "Deployment"
+	apiVersionLWS       = "leaderworkerset.x-k8s.io/v1"
+	apiVersionAppsV1    = "apps/v1"
+)
+
 // HPAOption is a functional option for configuring HPA resources.
 type HPAOption func(*autoscalingv2.HorizontalPodAutoscaler)
 
@@ -23,10 +30,10 @@ func WithScaleTargetRefKind(kind string) HPAOption {
 		hpa.Spec.ScaleTargetRef.Kind = kind
 		// Set appropriate APIVersion based on kind
 		switch kind {
-		case "LeaderWorkerSet":
-			hpa.Spec.ScaleTargetRef.APIVersion = "leaderworkerset.x-k8s.io/v1"
-		case "Deployment":
-			hpa.Spec.ScaleTargetRef.APIVersion = "apps/v1"
+		case kindLeaderWorkerSet:
+			hpa.Spec.ScaleTargetRef.APIVersion = apiVersionLWS
+		case kindDeployment:
+			hpa.Spec.ScaleTargetRef.APIVersion = apiVersionAppsV1
 		default:
 			// Keep existing APIVersion for unknown kinds
 		}
@@ -94,7 +101,7 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 		},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-				APIVersion: "apps/v1",
+				APIVersion: apiVersionAppsV1,
 				Kind:       "Deployment",
 				Name:       deploymentName,
 			},
@@ -107,7 +114,10 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 						Metric: autoscalingv2.MetricIdentifier{
 							Name: "wva_desired_replicas",
 							Selector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{"variant_name": vaName},
+								MatchLabels: map[string]string{
+									"variant_name":       vaName,
+									"exported_namespace": namespace,
+								},
 							},
 						},
 						Target: autoscalingv2.MetricTarget{

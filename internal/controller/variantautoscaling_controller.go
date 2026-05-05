@@ -83,6 +83,7 @@ func NewVariantAutoscalingReconciler(
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets/scale,verbs=get;update
 // +kubebuilder:rbac:groups="apps",resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
@@ -181,7 +182,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			// when the scale target is created
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, fmt.Sprintf("Failed to get scale target %s", va.Spec.ScaleTargetRef.Kind),
+		logger.Error(err, "Failed to get scale target "+va.Spec.ScaleTargetRef.Kind,
 			"name", scaleTargetName,
 			"namespace", va.Namespace)
 		return ctrl.Result{}, err

@@ -219,6 +219,7 @@ spec:
         selector:
           matchLabels:
             variant_name: "llama-8b"
+            exported_namespace: "llm-d"
             controller_instance: "my-instance-id"
 ```
 
@@ -430,5 +431,5 @@ Each team's workloads are managed by their dedicated controller instance.
 
 - [Installation Guide](installation.md) - Setting up WVA
 - [Configuration Guide](configuration.md) - Configuring VariantAutoscaling resources
-- [HPA Integration](../integrations/hpa-integration.md) - Integrating with Horizontal Pod Autoscaler
+- [HPA Integration](hpa-integration.md) - Integrating with Horizontal Pod Autoscaler
 - [Testing Guide](../developer-guide/testing.md) - Running E2E tests with controller isolation

@@ -72,6 +72,7 @@ type OptimizedAlloc struct {
 	LastRunTime metav1.Time `json:"lastRunTime,omitempty"`
 
 	// Accelerator is the type of accelerator for the optimized allocation.
+	//
 	// Deprecated: This field is deprecated and will be removed in a future version. Use node selector or node affinity from scale target instead.
 	// +optional
 	Accelerator string `json:"accelerator,omitempty"`

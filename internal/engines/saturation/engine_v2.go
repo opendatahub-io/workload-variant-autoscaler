@@ -88,7 +88,7 @@ func (e *Engine) runAnalyzersAndScore(
 	// The saturation analyzer reads thresholds from the config, so we apply
 	// per-analyzer overrides to the config's top-level fields.
 	for _, aw := range config.Analyzers {
-		if aw.Name == "saturation" && (aw.Enabled == nil || *aw.Enabled) {
+		if aw.Name == interfaces.SaturationAnalyzerName && (aw.Enabled == nil || *aw.Enabled) {
 			if aw.ScaleUpThreshold != nil {
 				config.ScaleUpThreshold = *aw.ScaleUpThreshold
 			}
@@ -112,10 +112,9 @@ func (e *Engine) runAnalyzersAndScore(
 		if aw.Enabled != nil && !*aw.Enabled {
 			continue
 		}
-		switch aw.Name {
-		case "saturation":
+		if aw.Name == interfaces.SaturationAnalyzerName {
 			totalWeighted += baseResult.RequiredCapacity * aw.Score
-			// future: case "throughput", "slo"
+			// future: add "throughput", "slo" cases
 		}
 	}
 
@@ -166,10 +165,10 @@ func (e *Engine) collectV2ModelRequest(
 		return nil, fmt.Errorf("collecting V2 model request for %s/%s: %w", namespace, modelID, err)
 	}
 
-	// Detect P/D disaggregation: true when any variant has role != "both"
+	// Detect P/D disaggregation: true when any variant has role != interfaces.RoleBoth
 	disaggregated := false
 	for _, vs := range variantStates {
-		if vs.Role != "" && vs.Role != "both" {
+		if vs.Role != "" && vs.Role != interfaces.RoleBoth {
 			disaggregated = true
 			break
 		}

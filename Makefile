@@ -25,6 +25,17 @@ SCALE_TO_ZERO_ENABLED       ?= false
 SCALER_BACKEND              ?= prometheus-adapter  # prometheus-adapter (HPA), keda (ScaledObject), or none (skip, use pre-installed backend)
 E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
+E2E_WVA_CHART_PATH          ?= $(CURDIR)/charts/workload-variant-autoscaler
+BENCHMARK_SCENARIO          ?= prefill_heavy  # Options: prefill_heavy (phase3a), decode_heavy (decode-heavy), symmetrical
+
+# Map scenario name to Ginkgo label filter
+ifeq ($(BENCHMARK_SCENARIO),decode_heavy)
+  BENCHMARK_LABEL_FILTER := decode-heavy
+else ifeq ($(BENCHMARK_SCENARIO),symmetrical)
+  BENCHMARK_LABEL_FILTER := symmetrical
+else
+  BENCHMARK_LABEL_FILTER := phase3a
+endif
 
 # Flags for deploy/install.sh installation script
 # Full e2e / CI-style cluster infra (WVA + llm-d, no chart VA/HPA): prefer `make deploy-e2e-infra`
@@ -33,6 +44,10 @@ CREATE_CLUSTER ?= false
 DEPLOY_LLM_D ?= true
 DELETE_CLUSTER ?= false
 DELETE_NAMESPACES ?= false
+
+# Multi-model deployment configuration (used by deploy-multi-model-infra)
+MODELS           ?= Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B
+NAMESPACE_SCOPED ?= false
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -93,7 +108,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest helm ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" PATH=$(LOCALBIN):$(PATH) go test $$(go list ./... | grep -v /e2e | grep -v /benchmark) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" PATH="$(LOCALBIN):$(PATH)" go test $$(go list ./... | grep -v /e2e | grep -v /benchmark) -coverprofile cover.out
 
 # Creates a multi-node Kind cluster
 # Adds emulated GPU labels and capacities per node
@@ -193,7 +208,9 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (infra-only: WVA + llm-d, no
 		SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 		SCALER_BACKEND=$(SCALER_BACKEND) \
 		INSTALL_GATEWAY_CTRLPLANE=true \
-		NAMESPACE_SCOPED=false \
+		NAMESPACE_SCOPED=$(NAMESPACE_SCOPED) \
+		DECODE_REPLICAS=$(DECODE_REPLICAS) \
+		LLM_D_RELEASE=$(LLM_D_RELEASE) \
 		WVA_IMAGE_REPO=$$IMAGE_REPO \
 		WVA_IMAGE_TAG=$$IMAGE_TAG \
 		WVA_IMAGE_PULL_POLICY=IfNotPresent \
@@ -206,9 +223,101 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (infra-only: WVA + llm-d, no
 		SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 		SCALER_BACKEND=$(SCALER_BACKEND) \
 		INSTALL_GATEWAY_CTRLPLANE=true \
-		NAMESPACE_SCOPED=false \
+		NAMESPACE_SCOPED=$(NAMESPACE_SCOPED) \
+		DECODE_REPLICAS=$(DECODE_REPLICAS) \
+		LLM_D_RELEASE=$(LLM_D_RELEASE) \
 		./deploy/install.sh; \
 	fi
+
+.PHONY: deploy-e2e-infra-multi-model
+deploy-e2e-infra-multi-model: ## Deploy e2e test infrastructure with two concurrent model services
+	@echo "Deploying multi-model e2e test infrastructure..."
+	./deploy/install-multi-model.sh
+
+# Configurable multi-model deployment for any environment.
+# Usage:
+#   make deploy-multi-model-infra \
+#     ENVIRONMENT=openshift \
+#     WVA_NS=my-namespace LLMD_NS=my-namespace \
+#     NAMESPACE_SCOPED=true \
+#     SKIP_BUILD=true DECODE_REPLICAS=1 \
+#     IMG_TAG=v0.6.0 LLM_D_RELEASE=v0.6.0 \
+#     MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
+.PHONY: deploy-multi-model-infra
+deploy-multi-model-infra: ## Deploy multi-model infra with N models. Set MODELS=m1,m2,... (comma-separated).
+	@echo "Deploying multi-model infrastructure (MODELS=$(MODELS))..."
+	@if [ "$(SKIP_BUILD)" != "true" ]; then \
+		echo "Building WVA image $(IMG)..."; \
+		$(MAKE) docker-build IMG=$(IMG); \
+	else \
+		echo "Skipping image build (SKIP_BUILD=true)"; \
+	fi; \
+	if echo "$(IMG)" | grep -q ":"; then \
+		IMAGE_REPO=$$(echo "$(IMG)" | cut -d: -f1); \
+		IMAGE_TAG=$$(echo "$(IMG)" | cut -d: -f2); \
+	else \
+		IMAGE_REPO="$(IMG)"; \
+		IMAGE_TAG="latest"; \
+	fi; \
+	echo "Using WVA image: $$IMAGE_REPO:$$IMAGE_TAG"; \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	WVA_NS="$(WVA_NS)" \
+	LLMD_NS="$(LLMD_NS)" \
+	NAMESPACE_SCOPED=$(NAMESPACE_SCOPED) \
+	DECODE_REPLICAS=$(DECODE_REPLICAS) \
+	LLM_D_RELEASE=$(LLM_D_RELEASE) \
+	WVA_IMAGE_REPO="$$IMAGE_REPO" \
+	WVA_IMAGE_TAG="$$IMAGE_TAG" \
+	WVA_IMAGE_PULL_POLICY=IfNotPresent \
+	MODELS="$(MODELS)" \
+	./deploy/install-multi-model.sh
+
+# Undeploy multi-model infrastructure.
+# Must use the same MODELS list that was used during deployment.
+.PHONY: undeploy-multi-model-infra
+undeploy-multi-model-infra: ## Undeploy multi-model infra. Use same MODELS=m1,m2,... as deploy.
+	@echo "Undeploying multi-model infrastructure (MODELS=$(MODELS))..."
+	ENVIRONMENT=$(ENVIRONMENT) \
+	WVA_NS="$(WVA_NS)" \
+	LLMD_NS="$(LLMD_NS)" \
+	NAMESPACE_SCOPED=$(NAMESPACE_SCOPED) \
+	DELETE_NAMESPACES=$(DELETE_NAMESPACES) \
+	MODELS="$(MODELS)" \
+	./deploy/install-multi-model.sh --undeploy
+
+# Multi-model scaling test parameters
+MM_MIN_REPLICAS ?= 1
+MM_MAX_REPLICAS ?= 5
+
+# TODO: Merge test-multi-model-scaling into test-benchmark by detecting MODELS env var:
+#   $(eval LABEL_FILTER := $(if $(MODELS),multi-model,phase3a))
+# Then: make test-benchmark MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
+# This eliminates the need for a separate target.
+.PHONY: test-multi-model-scaling
+test-multi-model-scaling: manifests generate fmt vet ## Run multi-model scaling benchmark (VA + HPA + GuideLLM per model)
+	@echo "Running multi-model scaling benchmark (MODELS=$(MODELS))..."
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(LLMD_NS) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALER_BACKEND=$(SCALER_BACKEND) \
+	MODEL_ID=$(MODEL_ID) \
+	MODELS="$(MODELS)" \
+	MM_MIN_REPLICAS=$(MM_MIN_REPLICAS) \
+	MM_MAX_REPLICAS=$(MM_MAX_REPLICAS) \
+	GATEWAY_SERVICE_NAME=multi-model-inference-gateway-istio \
+	BENCHMARK_SCENARIO=$(BENCHMARK_SCENARIO) \
+	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
+	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
+		-ginkgo.label-filter="multi-model"; \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Multi-model benchmark completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
 
 # Deploy e2e infrastructure with KEDA as scaler backend (installs KEDA, skips Prometheus Adapter).
 # Runs a subset of smoke tests from the e2e suite.
@@ -222,11 +331,12 @@ test-e2e-smoke: ## Run smoke e2e tests
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
 	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
 	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	WVA_E2E_CHART_PATH=$${WVA_E2E_CHART_PATH:-$(E2E_WVA_CHART_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
-	go test ./test/e2e/ -timeout 20m -v -ginkgo.v \
+	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
 		-ginkgo.label-filter="smoke" $(FOCUS_ARGS) $(SKIP_ARGS); \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
@@ -244,6 +354,7 @@ test-e2e-full: ## Run full e2e test suite
 	KUBECONFIG=$(KUBECONFIG) \
 	ENVIRONMENT=$(ENVIRONMENT) \
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	WVA_E2E_CHART_PATH=$${WVA_E2E_CHART_PATH:-$(E2E_WVA_CHART_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
@@ -271,8 +382,8 @@ test-e2e-full-with-setup: deploy-e2e-infra test-e2e-full
 
 # Benchmark targets
 .PHONY: test-benchmark
-test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-latency scenario)
-	@echo "Running benchmark tests..."
+test-benchmark: manifests generate fmt vet ## Run benchmark tests. Use BENCHMARK_SCENARIO=decode_heavy for decode-heavy workload.
+	@echo "Running benchmark tests (scenario=$(BENCHMARK_SCENARIO), label=$(BENCHMARK_LABEL_FILTER))..."
 	KUBECONFIG=$(KUBECONFIG) \
 	ENVIRONMENT=$(ENVIRONMENT) \
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
@@ -281,8 +392,10 @@ test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-late
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
-	go test ./test/benchmark/ -timeout 30m -v -ginkgo.v \
-		-ginkgo.label-filter="benchmark"; \
+	BENCHMARK_SCENARIO=$(BENCHMARK_SCENARIO) \
+	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
+	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
+		-ginkgo.label-filter="$(BENCHMARK_LABEL_FILTER)"; \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
 	echo "=========================================="; \
@@ -294,6 +407,24 @@ test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-late
 .PHONY: test-benchmark-with-setup
 test-benchmark-with-setup: deploy-e2e-infra test-benchmark
 
+# Stub for llm-d nightly reusable workflows (test_target=nightly-test-llm-d)
+# No-op; temporarily satisfies nightly CI make invocation
+# TODO: add nightly guide tests here
+.PHONY: nightly-test-llm-d
+nightly-test-llm-d: ## Nightly CI: noop; use as test_target instead of empty string
+	@:
+
+# Shared script: deploy/lib/llm_d_nightly_install.sh
+# Canonical target for llm-d-infra nightly reusables: ENVIRONMENT=openshift|kubernetes
+.PHONY: nightly-deploy-wva-guide
+nightly-deploy-wva-guide: ## Nightly: full WVA+llm-d stack from job env (WVA_NS <- WVA_NAMESPACE or CONTROLLER_NAMESPACE)
+	@export WVA_NS="$${WVA_NS:-$${WVA_NAMESPACE:-$${CONTROLLER_NAMESPACE:-}}}"; \
+	if [ "$${ENVIRONMENT:-}" = openshift ]; then \
+		LLM_D_NIGHTLY_PLATFORM=openshift bash "$(CURDIR)/deploy/lib/llm_d_nightly_install.sh" "$(CURDIR)"; \
+	else \
+		LLM_D_NIGHTLY_PLATFORM=cks bash "$(CURDIR)/deploy/lib/llm_d_nightly_install.sh" "$(CURDIR)"; \
+	fi
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
@@ -302,6 +433,7 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and deploy plugins
 	@echo "Syntax-checking deploy shell scripts..."
 	@bash -n deploy/install.sh
+	@bash -n deploy/install-multi-model.sh
 	@for script in deploy/lib/*.sh; do bash -n "$$script"; done
 	@for script in deploy/*/install.sh; do if [ -f "$$script" ]; then bash -n "$$script"; fi; done
 	@for script in deploy/kind-emulator/*.sh; do if [ -f "$$script" ]; then bash -n "$$script"; fi; done
