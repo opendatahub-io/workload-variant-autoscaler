@@ -51,7 +51,7 @@ require (
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-logr/logr v1.4.3
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
@@ -75,7 +75,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/spf13/cobra v1.10.0 // indirect
@@ -118,5 +118,5 @@ require (
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
+	sigs.k8s.io/yaml v1.6.0
 )
