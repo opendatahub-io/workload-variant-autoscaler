@@ -1,18 +1,20 @@
+---
+name: sync-upstream
+description: Sync code from upstream llm-d/llm-d-workload-variant-autoscaler into opendatahub-io fork. Fetches upstream main, merges into an ODH-based branch, resolves conflicts, scans for leftover conflict markers, pushes, and opens a PR.
+disable-model-invocation: true
+user-invocable: true
+allowed-tools: Bash(git *) Bash(gh *)
+argument-hint: "[commit-sha]"
+arguments: [sha]
+---
+
 # Sync Upstream
 
 Sync code from the upstream llm-d org to a user's fork and open a PR to opendatahub-io.
 
-## Configuration
-
-```bash
-ODH_BRANCH="main"  # The target branch on opendatahub-io. Change this if the branch name changes.
-```
-
 ## Input
 
-Ask the user: **"Sync to upstream/main HEAD or a specific commit SHA?"**
-
-- If the user provides a **commit SHA**, use that as the target commit
+- If the user provides a **commit SHA** via `$sha`, use that as the target commit
 - If no SHA is given, default to `upstream/main` HEAD
 
 ## Workflow
@@ -33,24 +35,27 @@ Ask the user: **"Sync to upstream/main HEAD or a specific commit SHA?"**
 
    Creating the sync branch and merging now.
    ```
-5. **Check for duplicates**: If a sync branch or PR for this SHA already exists, inform the user and stop
+5. **Check for duplicates**: If a local/remote sync branch exists, or an open PR for this SHA already exists on opendatahub-io (from any fork), inform the user and ask whether to proceed or stop
 6. **Create sync branch**: Create `sync/upstream-<short_sha>` based on `opendatahub/${ODH_BRANCH}`
 7. **Merge upstream**: Merge the target upstream commit into the sync branch. Resolve conflicts if needed
-8. **Verify merge**: Confirm merge completed successfully
-9. **Push branch**: Push to `origin`
-10. **Verify push**: Confirm branch was pushed successfully
-11. **Show PR summary**: Display what will be included in the PR
-12. **Confirm PR creation**: Ask the user whether to open a PR or stop with the branch pushed only
-13. **Open PR** (if confirmed): Open a PR to `opendatahub-io/workload-variant-autoscaler` targeting `${ODH_BRANCH}`
+8. **Restore ODH-protected files and verify**: After merge, restore any ODH-protected files to their opendatahub version. Verify merge completed successfully
+9. **Scan for conflict markers**: Scan all tracked files for leftover conflict markers (`<<<<`, `>>>>`, `====`) — git can sometimes report a clean merge when markers remain. If any are found, treat them as unresolved conflicts
+10. **Push branch**: Push to `origin`
+11. **Verify push**: Confirm branch was pushed successfully
+12. **Show PR summary**: Display what will be included in the PR
+13. **Confirm PR creation**: Ask the user whether to open a PR or stop with the branch pushed only
+14. **Open PR** (if confirmed): Open a PR to `opendatahub-io/workload-variant-autoscaler` targeting `${ODH_BRANCH}`
+15. **Return to original branch**: Check out the branch the user was on before the sync
 
 ## Commands
 
 **IMPORTANT**: Use `git -C <repo_path>` for all git commands to avoid working directory issues. Detect the repository root dynamically.
 
 ```bash
-# 0. Detect repository path and save current branch
+# 0. Detect repository path, save current branch, and set config
 REPO_PATH=$(git rev-parse --show-toplevel)
 ORIGINAL_BRANCH=$(git -C "${REPO_PATH}" rev-parse --abbrev-ref HEAD)
+ODH_BRANCH="main"
 
 # 1. Pre-flight: verify origin is the user's fork
 ORIGIN_URL=$(git -C "${REPO_PATH}" remote get-url origin)
@@ -68,7 +73,7 @@ git -C "${REPO_PATH}" fetch upstream main
 git -C "${REPO_PATH}" fetch opendatahub "${ODH_BRANCH}"
 
 # 3. Resolve target commit
-TARGET_COMMIT="${USER_SHA:-upstream/main}"
+TARGET_COMMIT="${sha:-upstream/main}"
 FULL_SHA=$(git -C "${REPO_PATH}" rev-parse "${TARGET_COMMIT}")
 SHORT_SHA=$(git -C "${REPO_PATH}" rev-parse --short "${TARGET_COMMIT}")
 git -C "${REPO_PATH}" merge-base --is-ancestor "${FULL_SHA}" upstream/main || {
@@ -82,12 +87,31 @@ echo ""
 echo "=== File changes summary ==="
 git -C "${REPO_PATH}" diff --stat opendatahub/${ODH_BRANCH}...${FULL_SHA}
 
-# 5. Check for duplicates
+# 5. Check for duplicates (local branch, remote branch, and existing PRs from any fork)
 BRANCH="sync/upstream-${SHORT_SHA}"
-if git -C "${REPO_PATH}" show-ref --verify --quiet "refs/heads/${BRANCH}" || \
-   git -C "${REPO_PATH}" show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
-  echo "Warning: branch ${BRANCH} already exists"
-  # Ask user whether to force-update or skip
+
+# 5a. Check for existing open PRs from any fork
+EXISTING_PR=$(gh pr list --repo opendatahub-io/workload-variant-autoscaler \
+  --state open --search "${FULL_SHA}" --json number,title,url,author,createdAt \
+  --jq '.[0] | "PR #\(.number): \(.title)\n  URL: \(.url)\n  Author: @\(.author.login)\n  Opened: \(.createdAt)"' 2>/dev/null)
+if [ -n "${EXISTING_PR}" ]; then
+  echo "BLOCKED: An open PR already exists for this SHA:"
+  echo "${EXISTING_PR}"
+  echo ""
+  echo "Stop here. Show the above to the user and ask if they want to proceed anyway or abort."
+  exit 1
+fi
+
+# 5b. Check for existing local or remote branch
+if git -C "${REPO_PATH}" show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+  echo "BLOCKED: Local branch ${BRANCH} already exists."
+  echo "Stop here. Ask the user: delete it and continue, or abort."
+  exit 1
+fi
+if git -C "${REPO_PATH}" show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
+  echo "BLOCKED: Remote branch origin/${BRANCH} already exists."
+  echo "Stop here. Ask the user: delete it and continue, or abort."
+  exit 1
 fi
 
 # 6. Create branch from opendatahub/${ODH_BRANCH}
@@ -96,14 +120,47 @@ git -C "${REPO_PATH}" checkout -b "${BRANCH}" opendatahub/${ODH_BRANCH}
 # 7. Merge upstream commit into the sync branch
 git -C "${REPO_PATH}" merge --no-ff "${FULL_SHA}" --no-edit \
   -m "Sync upstream llm-d/llm-d-workload-variant-autoscaler ${SHORT_SHA}"
+```
 
-# 8. Verify merge succeeded
-if [ $? -eq 0 ]; then
-  echo "✓ Merge completed successfully"
-  git -C "${REPO_PATH}" log -1 --stat
-else
-  echo "✗ Merge failed"
-  exit 1
+If the merge command succeeds, continue to step 8 below.
+
+If the merge command fails or reports conflicts, go to the **Conflict Resolution** section below before continuing.
+
+After the merge (whether clean or after conflict resolution), restore ODH-protected files (`OWNERS*`, `Dockerfile*konflux`, `.tekton/*.yaml`) to their opendatahub version. These files are ODH-only and must never take upstream changes.
+
+```bash
+# 8. Restore ODH-protected files
+RESTORED=false
+for file in $(git -C "${REPO_PATH}" diff --name-only opendatahub/${ODH_BRANCH} HEAD 2>/dev/null); do
+  case "${file}" in
+    OWNERS*|Dockerfile*konflux|.tekton/*.yaml)
+      echo "Restoring ODH-protected file: ${file}"
+      git -C "${REPO_PATH}" checkout opendatahub/${ODH_BRANCH} -- "${file}"
+      RESTORED=true
+      ;;
+  esac
+done
+if [ "${RESTORED}" = true ]; then
+  git -C "${REPO_PATH}" add -u
+  git -C "${REPO_PATH}" commit --amend --no-edit
+fi
+```
+
+If the restore and amend succeed, verify with `git -C "${REPO_PATH}" log -1 --stat` and continue to step 9.
+
+```bash
+# 9. Scan for leftover conflict markers
+# Git can sometimes report a clean merge when conflict markers remain.
+CONFLICT_FILES=$(git -C "${REPO_PATH}" grep -rlE '^(<{4,}|={4,}|>{4,})' || true)
+if [ -n "${CONFLICT_FILES}" ]; then
+  echo "Conflict markers found in the following files after merge:"
+  echo "${CONFLICT_FILES}"
+  echo ""
+  for f in ${CONFLICT_FILES}; do
+    echo "--- ${f} ---"
+    git -C "${REPO_PATH}" grep -nE '^(<{4,}|={4,}|>{4,})' "${f}"
+  done
+  # Treat as a merge conflict — show the markers to the user and ask how to resolve
 fi
 ```
 
@@ -112,10 +169,15 @@ fi
 If step 7 produces merge conflicts:
 
 1. List conflicted files with `git -C "${REPO_PATH}" diff --name-only --diff-filter=U`
-2. Show the conflicts to the user
-3. Attempt to resolve trivial conflicts automatically (whitespace, import order)
-4. For non-trivial conflicts, show the diff and ask the user how to resolve each file
-5. After all conflicts are resolved:
+2. **Auto-resolve ODH-protected files**: For any conflicted file matching ODH-protected patterns (`OWNERS*`, `Dockerfile*konflux`, `.tekton/*.yaml`), immediately resolve by keeping the opendatahub version:
+   ```bash
+   git -C "${REPO_PATH}" checkout opendatahub/${ODH_BRANCH} -- "${file}"
+   git -C "${REPO_PATH}" add "${file}"
+   ```
+3. Show remaining conflicts to the user
+4. Attempt to resolve trivial conflicts automatically (whitespace, import order)
+5. For non-trivial conflicts, show the diff and ask the user how to resolve each file
+6. After all conflicts are resolved:
    ```bash
    git -C "${REPO_PATH}" add -u
    git -C "${REPO_PATH}" commit --no-edit
@@ -124,14 +186,14 @@ If step 7 produces merge conflicts:
 ## Push and Open PR
 
 ```bash
-# 9. Push to origin (user's fork)
+# 10. Push to origin (user's fork)
 git -C "${REPO_PATH}" push -u origin "${BRANCH}"
 
-# 10. Verify push succeeded
+# 11. Verify push succeeded
 if git -C "${REPO_PATH}" ls-remote --heads origin "${BRANCH}" | grep -q "${BRANCH}"; then
-  echo "✓ Branch pushed successfully to origin/${BRANCH}"
+  echo "Branch pushed successfully to origin/${BRANCH}"
 else
-  echo "✗ Push verification failed"
+  echo "Push verification failed"
   exit 1
 fi
 ```
@@ -139,7 +201,7 @@ fi
 **Before creating the PR, show what will be included and ask the user whether to open a PR:**
 
 ```bash
-# 11. Show PR summary
+# 12. Show PR summary
 echo "=== PR Summary ==="
 echo "From: upstream/main (${FULL_SHA})"
 echo "To: opendatahub-io/workload-variant-autoscaler ${ODH_BRANCH}"
@@ -156,17 +218,17 @@ git -C "${REPO_PATH}" diff --stat opendatahub/${ODH_BRANCH}..HEAD
 If the user chooses to open the PR:
 
 ```bash
-# 12. Get fork owner from origin remote URL
+# 13. Get fork owner from origin remote URL
 # NOTE: Do not use `gh repo view --json owner` — on forks it resolves to the parent repo owner.
 FORK_OWNER=$(git -C "${REPO_PATH}" remote get-url origin | sed -E 's|.*[:/]([^/]+)/[^/]+(.git)?$|\1|')
 
-# 13. Open PR to opendatahub-io
+# 14. Open PR to opendatahub-io
 gh pr create \
   --repo opendatahub-io/workload-variant-autoscaler \
   --base "${ODH_BRANCH}" \
   --head "${FORK_OWNER}:${BRANCH}" \
   --title "[sync] upstream llm-d main branch ${SHORT_SHA} [$(date -u +%Y-%m-%d)]" \
-  --body "$(cat <<'EOF'
+  --body "$(cat <<EOF
 Syncs llm-d/llm-d-workload-variant-autoscaler main branch into ODH ${ODH_BRANCH} branch.
 
 Upstream commit: https://github.com/llm-d/llm-d-workload-variant-autoscaler/commit/${FULL_SHA}
@@ -177,7 +239,7 @@ EOF
 After PR creation (or skip), immediately return to the original branch without asking:
 
 ```bash
-# 14. Return to the original branch
+# 15. Return to the original branch
 git -C "${REPO_PATH}" checkout "${ORIGINAL_BRANCH}"
 ```
 
@@ -194,7 +256,7 @@ Sync completed successfully
 - PR: opendatahub-io/workload-variant-autoscaler#<pr_number>
 - URL: <pr_url>
 - Syncs: <N> upstream commits from llm-d/llm-d-workload-variant-autoscaler main (<short_sha>) into opendatahub-io ${ODH_BRANCH}
-- Conflict resolved: <file> (<resolution details>)   ← only if conflicts were resolved
+- Conflict resolved: <file> (<resolution details>)   <- only if conflicts were resolved
 - Returned to: <original_branch> branch
 ```
 
@@ -216,15 +278,3 @@ If the user chose to skip the PR, omit the PR and URL lines.
   git -C "${REPO_PATH}" branch -D "${BRANCH}"
   ```
 - Always return the PR URL on success
-
-## Best Practices
-
-1. **Use `git -C` consistently**: Never rely on `cd` for git operations - always use `git -C "${REPO_PATH}"` to avoid shell working directory issues
-
-2. **Run commands in background when needed**: For long-running operations that might have shell issues, use background bash with `run_in_background: true` and check output with `BashOutput` tool
-
-3. **Verify critical operations**: Always verify that merge and push succeeded before proceeding
-
-4. **Show before asking**: Display what will be synced/included before asking user to confirm PR creation
-
-5. **Handle errors gracefully**: Provide clear error messages and cleanup instructions if operations fail
