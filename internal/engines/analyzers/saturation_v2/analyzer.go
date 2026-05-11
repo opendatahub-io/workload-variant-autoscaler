@@ -99,7 +99,7 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 		// Track active roles for queue demand attribution
 		role := vc.Role
 		if role == "" {
-			role = "both"
+			role = interfaces.RoleBoth
 		}
 		activeRoles[role] = true
 	}
@@ -211,7 +211,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
 		EffectiveCapacity:     effectiveCapacity,
 		VLLMParams:            existingParams,
-		LearnedFrom:           "live",
+		LearnedFrom:           learnedFromLive,
 	})
 
 	return &ReplicaCapacity{
@@ -428,7 +428,7 @@ func (a *SaturationAnalyzer) aggregateByRole(
 	// Check if any variant has a non-"both" role
 	hasDisaggregation := false
 	for _, vc := range variantCapacities {
-		if vc.Role != "" && vc.Role != "both" {
+		if vc.Role != "" && vc.Role != interfaces.RoleBoth {
 			hasDisaggregation = true
 			break
 		}
@@ -447,7 +447,7 @@ func (a *SaturationAnalyzer) aggregateByRole(
 	for _, vc := range variantCapacities {
 		role := vc.Role
 		if role == "" {
-			role = "both"
+			role = interfaces.RoleBoth
 		}
 		ra, ok := roles[role]
 		if !ok {
@@ -511,7 +511,7 @@ func (a *SaturationAnalyzer) lookupCompatibleCapacity(namespace, modelID, varian
 }
 
 // estimateStoredCapacity returns a capacity estimate for a zero-replica variant
-// using its stored CapacityRecord. For "live" records (from a previously running
+// using its stored CapacityRecord. For learnedFromLive records (from a previously running
 // pod), the stored EffectiveCapacity is authoritative. For "deployment" records,
 // it tries to compute a better estimate using the k2 derivation formula with
 // model-level workload averages, bounded by:
@@ -526,7 +526,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 	}
 
 	// Live records have observed capacity — use directly
-	if rec.LearnedFrom == "live" {
+	if rec.LearnedFrom == learnedFromLive {
 		return float64(rec.EffectiveCapacity)
 	}
 
@@ -544,7 +544,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 			}
 
 			// Bound by compatible variant's live EffectiveCapacity (already min(k1,k2))
-			if compatible := a.capacityStore.FindCompatible(modelID, rec.AcceleratorName, rec.GpuCount, rec.VLLMParams); compatible != nil && compatible.LearnedFrom == "live" && compatible.EffectiveCapacity > 0 {
+			if compatible := a.capacityStore.FindCompatible(modelID, rec.AcceleratorName, rec.GpuCount, rec.VLLMParams); compatible != nil && compatible.LearnedFrom == learnedFromLive && compatible.EffectiveCapacity > 0 {
 				if compatible.EffectiveCapacity < bounded {
 					bounded = compatible.EffectiveCapacity
 				}

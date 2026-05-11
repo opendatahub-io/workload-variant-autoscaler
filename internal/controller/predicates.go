@@ -215,7 +215,7 @@ func VariantAutoscalingPredicate(k8sClient client.Client, cfg *config.Config) pr
 			if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: namespace}, &ns); err == nil {
 				annotations := ns.GetAnnotations()
 				if annotations != nil {
-					if value, exists := annotations[constants.NamespaceExcludeAnnotationKey]; exists && value == "true" {
+					if value, exists := annotations[constants.NamespaceExcludeAnnotationKey]; exists && value == constants.AnnotationValueTrue {
 						// Namespace is excluded - filter out this VA
 						return false
 					}

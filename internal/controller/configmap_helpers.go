@@ -95,7 +95,7 @@ func isNamespaceConfigEnabled(ctx context.Context, c client.Reader, namespace st
 	}
 
 	value, exists := labels[constants.NamespaceConfigEnabledLabelKey]
-	return exists && value == "true"
+	return exists && value == constants.AnnotationValueTrue
 }
 
 // isNamespaceExcluded checks if a namespace has the exclude annotation.
@@ -120,5 +120,5 @@ func isNamespaceExcluded(ctx context.Context, c client.Reader, namespace string)
 	}
 
 	value, exists := annotations[constants.NamespaceExcludeAnnotationKey]
-	return exists && value == "true"
+	return exists && value == constants.AnnotationValueTrue
 }

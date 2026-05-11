@@ -18,7 +18,7 @@ package scaletarget
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
@@ -453,7 +453,7 @@ func (m *MockErrorClient) Get(ctx context.Context, key client.ObjectKey, obj cli
 	m.callCount++
 	if m.callCount <= m.failTimes {
 		// Return a transient error that should trigger retry
-		return fmt.Errorf("transient error: temporary failure")
+		return errors.New("transient error: temporary failure")
 	}
 	if m.finalError != nil {
 		return m.finalError
@@ -833,8 +833,7 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 			if tt.expectedError {
 				require.Error(t, err)
 				require.Nil(t, accessor)
-				switch tt.errorType {
-				case "NotFound":
+				if tt.errorType == "NotFound" {
 					assert.True(t, apierrors.IsNotFound(err), "expected NotFound error")
 				}
 			} else {

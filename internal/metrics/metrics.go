@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -18,6 +19,9 @@ var (
 	desiredReplicas     *prometheus.GaugeVec
 	currentReplicas     *prometheus.GaugeVec
 	desiredRatio        *prometheus.GaugeVec
+
+	optimizationDuration *prometheus.HistogramVec
+	modelsProcessedGauge *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -76,6 +80,30 @@ func InitMetrics(registry prometheus.Registerer) error {
 		baseLabels,
 	)
 
+	optimizationDurationLabels := []string{constants.LabelStatus}
+	if controllerInstance != "" {
+		optimizationDurationLabels = append(optimizationDurationLabels, constants.LabelControllerInstance)
+	}
+	optimizationDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    constants.WVAOptimizationDurationSeconds,
+			Help:    "Duration of optimization loop cycles in seconds",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		},
+		optimizationDurationLabels,
+	)
+	modelsProcessedLabels := []string{}
+	if controllerInstance != "" {
+		modelsProcessedLabels = append(modelsProcessedLabels, constants.LabelControllerInstance)
+	}
+	modelsProcessedGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAModelsProcessed,
+			Help: "Number of models processed in the last optimization cycle",
+		},
+		modelsProcessedLabels,
+	)
+
 	// Register metrics with the registry
 	if err := registry.Register(replicaScalingTotal); err != nil {
 		return fmt.Errorf("failed to register replicaScalingTotal metric: %w", err)
@@ -88,6 +116,12 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(desiredRatio); err != nil {
 		return fmt.Errorf("failed to register desiredRatio metric: %w", err)
+	}
+	if err := registry.Register(optimizationDuration); err != nil {
+		return fmt.Errorf("failed to register optimizationDuration metric: %w", err)
+	}
+	if err := registry.Register(modelsProcessedGauge); err != nil {
+		return fmt.Errorf("failed to register modelsProcessedGauge metric: %w", err)
 	}
 
 	return nil
@@ -126,11 +160,36 @@ func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmd
 
 	// These operations are local and should never fail, but we handle errors for debugging
 	if replicaScalingTotal == nil {
-		return fmt.Errorf("replicaScalingTotal metric not initialized")
+		return errors.New("replicaScalingTotal metric not initialized")
 	}
 
 	replicaScalingTotal.With(labels).Inc()
 	return nil
+}
+
+// ObserveOptimizationDuration records the duration of an optimization cycle with the given status.
+// Status should be one of: "success", "error".
+func ObserveOptimizationDuration(durationSeconds float64, status string) {
+	if optimizationDuration == nil {
+		return
+	}
+	labels := prometheus.Labels{constants.LabelStatus: status}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	optimizationDuration.With(labels).Observe(durationSeconds)
+}
+
+// SetModelsProcessed sets the gauge to the number of models processed in the last optimization cycle.
+func SetModelsProcessed(count int) {
+	if modelsProcessedGauge == nil {
+		return
+	}
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	modelsProcessedGauge.With(labels).Set(float64(count))
 }
 
 // EmitReplicaMetrics emits current and desired replica metrics
@@ -148,7 +207,7 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 
 	// These operations are local and should never fail, but we handle errors for debugging
 	if currentReplicas == nil || desiredReplicas == nil || desiredRatio == nil {
-		return fmt.Errorf("replica metrics not initialized")
+		return errors.New("replica metrics not initialized")
 	}
 
 	currentReplicas.With(baseLabels).Set(float64(current))

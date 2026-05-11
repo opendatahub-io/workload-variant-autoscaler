@@ -47,7 +47,7 @@ CONTROLLER_INSTANCE=${CONTROLLER_INSTANCE:-""}
 # llm-d Configuration
 LLM_D_OWNER=${LLM_D_OWNER:-"llm-d"}
 LLM_D_PROJECT=${LLM_D_PROJECT:-"llm-d"}
-LLM_D_RELEASE=${LLM_D_RELEASE:-"v0.3.0"}
+LLM_D_RELEASE=${LLM_D_RELEASE:-"v0.6.0"}
 LLM_D_MODELSERVICE_NAME=${LLM_D_MODELSERVICE_NAME:-"ms-$WELL_LIT_PATH_NAME-llm-d-modelservice"}
 LLM_D_EPP_NAME=${LLM_D_EPP_NAME:-"gaie-$WELL_LIT_PATH_NAME-epp"}
 CLIENT_PREREQ_DIR=${CLIENT_PREREQ_DIR:-"$WVA_PROJECT/$LLM_D_PROJECT/guides/prereq/client-setup"}
@@ -58,8 +58,7 @@ ITL_AVERAGE_LATENCY_MS=${ITL_AVERAGE_LATENCY_MS:-20}
 TTFT_AVERAGE_LATENCY_MS=${TTFT_AVERAGE_LATENCY_MS:-200}
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
 # llm-d-inference scheduler with image with flowcontrol support
-# TODO: update once the llm-d-inference-scheduler v0.5.0 is released
-LLM_D_INFERENCE_SCHEDULER_IMG=${LLM_D_INFERENCE_SCHEDULER_IMG:-"ghcr.io/llm-d/llm-d-inference-scheduler:v0.5.0-rc.1"}
+LLM_D_INFERENCE_SCHEDULER_IMG=${LLM_D_INFERENCE_SCHEDULER_IMG:-"ghcr.io/llm-d/llm-d-inference-scheduler:v0.7.0"}
 
 # Gateway Configuration
 GATEWAY_PROVIDER=${GATEWAY_PROVIDER:-"istio"} # Options: kgateway, istio
@@ -123,6 +122,13 @@ KEDA_NAMESPACE=${KEDA_NAMESPACE:-keda-system}
 KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
 # kubernetes: default false (cluster-managed KEDA); set true to let this script install/upgrade KEDA via Helm
 KEDA_HELM_INSTALL=${KEDA_HELM_INSTALL:-false}
+
+# LeaderWorkerSet (LWS) configuration
+# Set DEPLOY_LWS=false to skip LWS installation (e.g., when running benchmarks
+# locally or when LWS is already installed cluster-wide)
+DEPLOY_LWS=${DEPLOY_LWS:-true}
+LWS_NAMESPACE=${LWS_NAMESPACE:-"lws-system"}
+LWS_CHART_VERSION=${LWS_CHART_VERSION:-"0.8.0"}
 
 # Environment-related variables
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -36,5 +36,7 @@ llmd-infra/
 *.tgz
 actionlint
 
+# AI
+.claude/worktrees/
 # Claude Code local settings (personal permissions, not for commit)
 .claude/settings.local.json

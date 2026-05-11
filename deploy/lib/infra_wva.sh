@@ -100,6 +100,8 @@ deploy_wva_controller() {
         --set wva.scaleToZero="$ENABLE_SCALE_TO_ZERO" \
         ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
         ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP} \
+        ${KV_CACHE_THRESHOLD:+--set wva.capacityScaling.default.kvCacheThreshold=$KV_CACHE_THRESHOLD} \
+        ${QUEUE_LENGTH_THRESHOLD:+--set wva.capacityScaling.default.queueLengthThreshold=$QUEUE_LENGTH_THRESHOLD} \
         ${KV_SPARE_TRIGGER:+--set wva.capacityScaling.default.kvSpareTrigger=$KV_SPARE_TRIGGER} \
         ${QUEUE_SPARE_TRIGGER:+--set wva.capacityScaling.default.queueSpareTrigger=$QUEUE_SPARE_TRIGGER}
 
@@ -192,13 +194,20 @@ deploy_wva_prerequisites_kube_like() {
     fi
 
     # LeaderWorkerSet (WVA dependency; see upstream chart / #910).
-    CHART_VERSION=0.8.0
-    log_info "Installing LeaderWorkerSet version $CHART_VERSION into lws-system namespace"
-    helm upgrade -i lws oci://registry.k8s.io/lws/charts/lws \
-        --version="$CHART_VERSION" \
-        --namespace lws-system \
-        --create-namespace \
-        --wait --timeout 300s
+    if [ "${DEPLOY_LWS:-true}" = "true" ]; then
+        if kubectl get crd leaderworkersets.leaderworkerset.x-k8s.io &> /dev/null; then
+            log_info "LeaderWorkerSet CRD already installed, skipping LWS deployment"
+        else
+            log_info "Installing LeaderWorkerSet version ${LWS_CHART_VERSION} into ${LWS_NAMESPACE} namespace"
+            helm upgrade -i lws oci://registry.k8s.io/lws/charts/lws \
+                --version="${LWS_CHART_VERSION}" \
+                --namespace "${LWS_NAMESPACE}" \
+                --create-namespace \
+                --wait --timeout 300s
+        fi
+    else
+        log_info "Skipping LeaderWorkerSet installation (DEPLOY_LWS=false)"
+    fi
 
     log_success "WVA prerequisites complete"
 }

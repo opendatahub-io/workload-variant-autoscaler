@@ -200,7 +200,7 @@ var _ = Describe("PodVAMapper", func() {
 			scheme := createScheme()
 
 			// Setup multiple deployments
-			var objects []client.Object
+			objects := make([]client.Object, 0, 5)
 			for _, name := range []string{"deploy-a", "deploy-b", "deploy-c"} {
 				deployments["default/"+name] = scaletarget.NewDeploymentAccessor(&appsv1.Deployment{
 					ObjectMeta: metav1.ObjectMeta{

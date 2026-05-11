@@ -55,7 +55,7 @@ func cleanupScaleFromZeroResources() {
 	}
 
 	// Delete all ScaledObjects with scale-from-zero prefix (KEDA)
-	if cfg.ScalerBackend == "keda" {
+	if cfg.ScalerBackend == scalerBackendKeda {
 		soList := &unstructured.UnstructuredList{}
 		soList.SetAPIVersion("keda.sh/v1alpha1")
 		soList.SetKind("ScaledObjectList")
@@ -135,15 +135,15 @@ func cleanupScaleFromZeroResources() {
 }
 
 // Scale-from-zero test validates that the WVA controller correctly detects pending requests
-// and scales up scale targets from zero replicas. Requires GIE queuing (ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER
-// on EPP from install when E2E_TESTS_ENABLED=true) and an InferenceObjective (applied below in BeforeAll).
+// and scales up scale targets from zero replicas. Requires GIE queuing (flowControl feature gate
+// enabled on EPP from install when E2E_TESTS_ENABLED=true) and an InferenceObjective (applied below in BeforeAll).
 // This suite needs a scaler that allows minReplicas=0 on the scaled workload: either
 // SCALE_TO_ZERO_ENABLED=true where native HPA supports it (HPAScaleToZero), or SCALER_BACKEND=keda
 // (ScaledObject). OpenShift usually lacks HPAScaleToZero; e2e config ignores SCALE_TO_ZERO_ENABLED there,
 // so use SCALER_BACKEND=keda for this Describe when running on OpenShift.
 // On platforms without the HPAScaleToZero feature gate (e.g. OpenShift), set SCALER_BACKEND=keda
 // so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
-var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Label("flaky"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -156,7 +156,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		// On platforms where HPA rejects minReplicas=0 (e.g. OpenShift without
 		// HPAScaleToZero feature gate), SCALER_BACKEND=keda must be set so the
 		// test creates a KEDA ScaledObject instead of a native HPA.
-		if cfg.ScalerBackend != "keda" && !cfg.ScaleToZeroEnabled {
+		if cfg.ScalerBackend != scalerBackendKeda && !cfg.ScaleToZeroEnabled {
 			Skip("This suite needs minReplicas=0 on the scaler: set SCALER_BACKEND=\"keda\" " +
 				"or SCALE_TO_ZERO_ENABLED=true (ignored on OpenShift without HPAScaleToZero — use KEDA); " +
 				"current configuration does not support that scaler shape")
@@ -182,10 +182,10 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		// Wait for EPP pods to be ready
 		Eventually(func(g Gomega) {
 			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("inferencepool=%s", eppServiceName),
+				LabelSelector: "inferencepool=" + eppServiceName,
 			})
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
-			g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "EPP pods should exist")
+			g.Expect(podList.Items).ToNot(BeEmpty(), "EPP pods should exist")
 
 			// Check that at least one pod is ready
 			hasReadyPod := false
@@ -208,13 +208,13 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		if poolRefName == "" {
 			poolRefName = strings.TrimSuffix(eppServiceName, "-epp")
 		}
-		ioApplied, errIO := fixtures.EnsureInferenceObjective(ctx, dynamicClient, cfg.LLMDNamespace, poolRefName)
+		ioApplied, errIO := fixtures.EnsureInferenceObjective(ctx, crClient, cfg.LLMDNamespace, poolRefName)
 		Expect(errIO).NotTo(HaveOccurred(), "EnsureInferenceObjective should not return a hard error")
 		if !ioApplied {
 			Skip("InferenceObjective API not available on cluster; scale-from-zero requires inference.networking.x-k8s.io InferenceObjective")
 		}
 		DeferCleanup(func() {
-			_ = fixtures.DeleteInferenceObjective(context.Background(), dynamicClient, cfg.LLMDNamespace)
+			_ = fixtures.DeleteInferenceObjective(context.Background(), crClient, cfg.LLMDNamespace)
 		})
 
 		By("Creating model service deployment with 0 initial replicas")
@@ -275,7 +275,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
 		By("Creating scaler with minReplicas=0 (HPA or ScaledObject per backend)")
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10, cfg.MonitoringNS)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject with scale-to-zero")
@@ -304,7 +304,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		By("Cleaning up scale-from-zero test resources")
 
 		// Delete scaler (HPA or ScaledObject)
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
 		} else {
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
@@ -356,7 +356,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		})
 
 		It("should have scaler configured with minReplicas=0", func() {
-			if cfg.ScalerBackend == "keda" {
+			if cfg.ScalerBackend == scalerBackendKeda {
 				By("Verifying ScaledObject allows scale-to-zero")
 				so := &unstructured.Unstructured{}
 				so.SetAPIVersion("keda.sh/v1alpha1")
@@ -393,7 +393,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 			}
 		})
 
-		It("should detect pending requests and trigger scale-from-zero", func() {
+		It("should detect pending requests and trigger scale-from-zero", Label("flaky"), func() {
 			By("Discovering inference gateway service")
 			// Discover the inference gateway service
 			gatewayServiceName := ""
@@ -423,10 +423,10 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 			By("Waiting for job pod to be running and sending requests")
 			Eventually(func(g Gomega) {
 				podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-					LabelSelector: fmt.Sprintf("job-name=%s", triggerJobName),
+					LabelSelector: "job-name=" + triggerJobName,
 				})
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "Job pod should exist")
+				g.Expect(podList.Items).ToNot(BeEmpty(), "Job pod should exist")
 
 				pod := podList.Items[0]
 				g.Expect(pod.Status.Phase).To(Or(
@@ -608,7 +608,7 @@ fi
 }
 
 // Scale-from-zero test for LeaderWorkerSet
-var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("full"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("full"), Label("flaky"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-lws-pool"
 		modelServiceName = "scale-from-zero-lws-ms"
@@ -623,7 +623,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		// On platforms where HPA rejects minReplicas=0 (e.g. OpenShift without
 		// HPAScaleToZero feature gate), SCALER_BACKEND=keda must be set so the
 		// test creates a KEDA ScaledObject instead of a native HPA.
-		if cfg.ScalerBackend != "keda" && !cfg.ScaleToZeroEnabled {
+		if cfg.ScalerBackend != scalerBackendKeda && !cfg.ScaleToZeroEnabled {
 			Skip("This suite needs minReplicas=0 on the scaler: set SCALER_BACKEND=\"keda\" " +
 				"or SCALE_TO_ZERO_ENABLED=true (ignored on OpenShift without HPAScaleToZero — use KEDA); " +
 				"current configuration does not support that scaler shape")
@@ -646,10 +646,10 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		// Wait for EPP pods to be ready
 		Eventually(func(g Gomega) {
 			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("inferencepool=%s", eppServiceName),
+				LabelSelector: "inferencepool=" + eppServiceName,
 			})
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
-			g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "EPP pods should exist")
+			g.Expect(podList.Items).ToNot(BeEmpty(), "EPP pods should exist")
 
 			// Check that at least one pod is ready
 			hasReadyPod := false
@@ -668,7 +668,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service LeaderWorkerSet with 0 initial replicas")
-		err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 		// Register cleanup for LWS
@@ -782,7 +782,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		})
 
 		By("Creating scaler with minReplicas=0 (HPA or ScaledObject per backend)")
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, lwsName, vaName, 0, 10, cfg.MonitoringNS,
 				fixtures.WithScaledObjectScaleTargetKind("LeaderWorkerSet"))
@@ -795,7 +795,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 
 		// Register cleanup for scaler
 		DeferCleanup(func() {
-			if cfg.ScalerBackend == "keda" {
+			if cfg.ScalerBackend == scalerBackendKeda {
 				err := fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
 				if err != nil && !errors.IsNotFound(err) {
 					GinkgoWriter.Printf("Warning: failed to delete ScaledObject: %v\n", err)
@@ -863,7 +863,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		})
 
 		It("should have scaler configured with minReplicas=0 for LWS", func() {
-			if cfg.ScalerBackend == "keda" {
+			if cfg.ScalerBackend == scalerBackendKeda {
 				By("Verifying ScaledObject allows scale-to-zero for LWS")
 				so := &unstructured.Unstructured{}
 				so.SetAPIVersion("keda.sh/v1alpha1")
@@ -908,7 +908,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 			}
 		})
 
-		It("should detect pending requests and trigger scale-from-zero for LWS", func() {
+		It("should detect pending requests and trigger scale-from-zero for LWS", Label("flaky"), func() {
 			By("Discovering inference gateway service")
 			gatewayServiceName := ""
 			serviceList, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
@@ -935,10 +935,10 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 			By("Waiting for job pod to be running and sending requests")
 			Eventually(func(g Gomega) {
 				podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-					LabelSelector: fmt.Sprintf("job-name=%s", triggerJobName),
+					LabelSelector: "job-name=" + triggerJobName,
 				})
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "Job pod should exist")
+				g.Expect(podList.Items).ToNot(BeEmpty(), "Job pod should exist")
 
 				pod := podList.Items[0]
 				g.Expect(pod.Status.Phase).To(Or(
@@ -1029,7 +1029,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 })
 
 // Scale-from-zero test for LeaderWorkerSet (single-node)
-var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", Serial, Label("full"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", Serial, Label("full"), Label("flaky"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-lws-single-pool"
 		modelServiceName = "scale-from-zero-lws-single-ms"
@@ -1044,7 +1044,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		// On platforms where HPA rejects minReplicas=0 (e.g. OpenShift without
 		// HPAScaleToZero feature gate), SCALER_BACKEND=keda must be set so the
 		// test creates a KEDA ScaledObject instead of a native HPA.
-		if cfg.ScalerBackend != "keda" && !cfg.ScaleToZeroEnabled {
+		if cfg.ScalerBackend != scalerBackendKeda && !cfg.ScaleToZeroEnabled {
 			Skip("This suite needs minReplicas=0 on the scaler: set SCALER_BACKEND=\"keda\" " +
 				"or SCALE_TO_ZERO_ENABLED=true (ignored on OpenShift without HPAScaleToZero — use KEDA); " +
 				"current configuration does not support that scaler shape")
@@ -1067,10 +1067,10 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		// Wait for EPP pods to be ready
 		Eventually(func(g Gomega) {
 			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("inferencepool=%s", eppServiceName),
+				LabelSelector: "inferencepool=" + eppServiceName,
 			})
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
-			g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "EPP pods should exist")
+			g.Expect(podList.Items).ToNot(BeEmpty(), "EPP pods should exist")
 
 			// Check that at least one pod is ready
 			hasReadyPod := false
@@ -1089,7 +1089,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service LeaderWorkerSet with single-node (leader only) with 0 initial replicas")
-		err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 		// Register cleanup for LWS
@@ -1203,7 +1203,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		})
 
 		By("Creating scaler with minReplicas=0 (HPA or ScaledObject per backend)")
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, lwsName, vaName, 0, 10, cfg.MonitoringNS,
 				fixtures.WithScaledObjectScaleTargetKind("LeaderWorkerSet"))
@@ -1216,7 +1216,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 
 		// Register cleanup for scaler
 		DeferCleanup(func() {
-			if cfg.ScalerBackend == "keda" {
+			if cfg.ScalerBackend == scalerBackendKeda {
 				err := fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
 				if err != nil && !errors.IsNotFound(err) {
 					GinkgoWriter.Printf("Warning: failed to delete ScaledObject: %v\n", err)
@@ -1284,7 +1284,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		})
 
 		It("should have scaler configured with minReplicas=0 for single-node LWS", func() {
-			if cfg.ScalerBackend == "keda" {
+			if cfg.ScalerBackend == scalerBackendKeda {
 				By("Verifying ScaledObject allows scale-to-zero for single-node LWS")
 				so := &unstructured.Unstructured{}
 				so.SetAPIVersion("keda.sh/v1alpha1")
@@ -1329,7 +1329,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 			}
 		})
 
-		It("should detect pending requests and trigger scale-from-zero for single-node LWS", func() {
+		It("should detect pending requests and trigger scale-from-zero for single-node LWS", Label("flaky"), func() {
 			By("Discovering inference gateway service")
 			gatewayServiceName := ""
 			serviceList, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
@@ -1356,10 +1356,10 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 			By("Waiting for job pod to be running and sending requests")
 			Eventually(func(g Gomega) {
 				podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-					LabelSelector: fmt.Sprintf("job-name=%s", triggerJobName),
+					LabelSelector: "job-name=" + triggerJobName,
 				})
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "Job pod should exist")
+				g.Expect(podList.Items).ToNot(BeEmpty(), "Job pod should exist")
 
 				pod := podList.Items[0]
 				g.Expect(pod.Status.Phase).To(Or(
@@ -1448,4 +1448,3 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		})
 	})
 })
-
