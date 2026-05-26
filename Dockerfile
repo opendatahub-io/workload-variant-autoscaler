@@ -19,7 +19,7 @@ COPY pkg/ pkg/
 RUN go mod download && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ${APP_ROOT}/manager cmd/main.go
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:759f5f42d9d6ce2a705e290b7fc549e2d2cd39312c4fa345f93c02e4abb8da95 AS deploy
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:5b74fce9d6e629942a0c6dc0f546c193e70d7f974d999a48c948c53dd3d36362 AS deploy
 
 ARG VERSION
 ARG APP_BUILD_ROOT
