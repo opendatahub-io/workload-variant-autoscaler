@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -20,7 +19,7 @@ import (
 //
 // Note: On Kind clusters, pod IPs are not routable from outside the cluster, so direct
 // scraping tests are skipped. In-cluster scraping tests still run to verify functionality.
-var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
+var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, func() {
 	var (
 		poolName          = "pod-scraping-pool"
 		modelServiceName  = "pod-scraping-ms"
@@ -32,7 +31,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 		By("Creating model service to ensure EPP pods exist")
 		// EPP pods are created when a model service is deployed to an InferencePool
 		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace,
-			modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+			modelServiceName, poolName, cfg.ModelID, "", cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
 		By("Creating service to expose model server")
@@ -47,13 +46,13 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(deployment.Status.ReadyReplicas).To(BeNumerically(">=", 1),
 				"Model service should have at least 1 ready replica")
-		}, time.Duration(cfg.PodReadyTimeout)*time.Second, 5*time.Second).Should(Succeed())
+		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 		By("Discovering EPP service")
 		// Discover existing EPP services dynamically (like legacy tests)
 		// EPP service name follows pattern: {poolName}-epp
 		// First try the expected pool name, then discover any existing EPP service
-		expectedEPPName := fmt.Sprintf("%s-epp", poolName)
+		expectedEPPName := poolName + "-epp"
 
 		// Verify EPP service exists (either the expected one or discover an existing one)
 		Eventually(func(g Gomega) {
@@ -79,7 +78,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 			}
 
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
-		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		}).Should(Succeed())
 
 		Expect(eppServiceName).NotTo(BeEmpty(), "EPP service name should be set")
 
@@ -99,7 +98,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 			}
 			g.Expect(readyCount).To(BeNumerically(">=", 1),
 				"Should have at least one Ready EPP pod")
-		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSlowSec)*time.Second).Should(Succeed())
 
 		By("Discovering or creating metrics reader secret")
 		var discoverErr error

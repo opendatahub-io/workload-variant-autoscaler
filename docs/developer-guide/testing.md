@@ -140,26 +140,39 @@ WVA provides a **single consolidated E2E suite** that runs on multiple environme
 - **Environments**: Kind (emulated), OpenShift, or generic Kubernetes
 - **Tiers**: Smoke (~5–10 min) for PRs; full suite (~15–25 min) for comprehensive validation
 
-### Infra-Only Setup (Required Before Running Tests)
+### Scope
 
-Tests expect **only** the WVA controller and llm-d infrastructure to be deployed; they create VariantAutoscaling resources, HPAs, and model services themselves. Use the install script in **infra-only** mode:
+E2E is intended to be a **deterministic correctness signal**: resource wiring, reconciliation, and stable invariants (e.g., CRs reconcile, status conditions are set, scalers are created and point at the right targets/metrics). Traffic generation and performance/benchmarking scenarios should live outside `test/e2e/`.
+
+### E2E shared fixtures
+
+Code lives under `test/e2e/fixtures`. The `fixtures` package holds reusable helpers to create, ensure (idempotent setup), and delete Kubernetes objects used by the e2e suite (VariantAutoscaling, HPA, KEDA ScaledObject, model services, Services, ServiceMonitors, InferenceObjective, etc.). Package-level documentation and naming conventions (`Create*` / `Ensure*` / `Delete*`, `baseName` vs full resource names) live in the package doc:
 
 ```bash
-# From repository root: deploy only WVA + llm-d infrastructure (no VA/HPA/model services)
-cd deploy
-export ENVIRONMENT="kind-emulator"   # or "openshift", "kubernetes"
-export INFRA_ONLY=true
-./install.sh
-# Or: ./install.sh --infra-only
+go doc ./test/e2e/fixtures
 ```
 
-This deploys:
-- WVA controller
-- llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
-- Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
-- **No** VariantAutoscaling, HPA, or model services (tests create these)
+After changing fixture APIs or generated object shape, compile e2e without running specs:
 
-When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script also enables **GIE queuing** so scale-from-zero tests can run: it patches the EPP with `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER=true` and applies an **InferenceObjective** (`e2e-default`) that references the default InferencePool. This ensures the metric `inference_extension_flow_control_queue_size` is populated when requests hit the gateway.
+```bash
+go test ./test/e2e/... -run TestDoesNotExist
+```
+
+### Infra-Only Setup (Required Before Running Tests)
+
+Tests expect **WVA + monitoring + scaler + llm-d EPP/gateway** to be deployed; they create VariantAutoscaling resources, HPAs, and model workloads themselves. Use **`make deploy-e2e-infra`** (runs `deploy/install.sh` then `deploy/install-epp.sh`) or invoke those scripts with the same environment variables the Makefile sets.
+
+This deploys:
+- WVA controller (via Kustomize)
+- llm-d EPP (GAIE standalone chart) via `deploy/install-epp.sh`
+- Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
+- **No** VariantAutoscaling or HPA (tests create these)
+
+When `ENABLE_SCALE_TO_ZERO=true` (set by `make deploy-e2e-infra` when `SCALE_TO_ZERO_ENABLED=true`), **`install-epp.sh`** enables the **flowControl feature gate** on the EPP so it exposes `inference_extension_flow_control_queue_size`. The **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts.
+
+**Install script tuning (optional, same variables as `deploy/install.sh`):**
+
+- **`SKIP_HELM_REPO_UPDATE`**: When set to **`true`**, `helm repo update` is skipped during installs (faster, less network churn). Default runs `helm repo update` to refresh repo indexes.
 
 Alternatively, use the Makefile to deploy infra and run tests in one go:
 
@@ -196,7 +209,7 @@ FOCUS="Basic VA lifecycle" make test-e2e-smoke
 ### What the Suite Validates
 
 - **Smoke (label `smoke`)**: Infrastructure readiness, basic VA lifecycle, target condition validation
-- **Full (label `full`)**: Saturation scaling (single and multiple VAs), scale-from-zero, scale-to-zero (when `SCALE_TO_ZERO_ENABLED=true`), limiter, pod scraping, parallel load scale-up
+- **Full (label `full`)**: Smoke plus additional deterministic correctness checks (scale-from-zero, limiter, pod scraping, etc.)
 
 ### Configuration
 
@@ -208,8 +221,11 @@ Key environment variables (see [E2E Test Suite README](../../test/e2e/README.md)
 | `USE_SIMULATOR` | `true` | Emulated GPUs (true) or real vLLM (false) |
 | `SCALE_TO_ZERO_ENABLED` | `false` | Enable scale-to-zero tests (Kind supports both enabled and disabled) |
 | `SCALER_BACKEND` | `prometheus-adapter` | `prometheus-adapter` or `keda` (KEDA only for kind-emulator) |
-| `REQUEST_RATE` | `8` | Load generation: requests per second |
-| `NUM_PROMPTS` | `1000` | Load generation: total prompts |
+| `POD_READY_TIMEOUT` / `SCALE_UP_TIMEOUT` | `300` / `600` | Model ready vs longest scale/job waits (seconds) |
+| `E2E_EVENTUALLY_STANDARD`, etc. | see README | Optional `Eventually` timeouts and poll intervals (`E2E_EVENTUALLY_*`, `E2E_EVENTUALLY_POLL*`) |
+| `RESTART_PROMETHEUS_ADAPTER` | `auto` | kind-emulator: `auto` probes adapter + API before restarting pods; `true`/`false` force always/never |
+
+Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile patches the `wva-saturation-scaling-config` ConfigMap when set) — see **Install script tuning** above.
 
 For running multiple test runs in parallel, use [multi-controller isolation](../user-guide/multi-controller-isolation.md) (`CONTROLLER_INSTANCE`).
 
@@ -256,7 +272,6 @@ Infrastructure is deployed in **infra-only** mode (WVA + llm-d only); tests crea
 Runs OpenShift E2E tests on dedicated cluster:
 - Triggered manually or on specific labels
 - Deploys PR-specific namespaces
-- Runs multi-model tests
 - On failure: automatically scales down GPU workloads while preserving debugging resources (VA, HPA, logs)
 - Smart resource management frees GPUs for other PRs without manual intervention
 
@@ -451,11 +466,11 @@ go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="full && !flaky" -timeout 
 # For Kind E2E tests (default cluster name: kind-wva-gpu-cluster or from CLUSTER_NAME)
 export KUBECONFIG=~/.kube/config   # or path from kind get kubeconfig
 kubectl get pods -A
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager
 
 # For OpenShift E2E tests
 oc get pods -A
-oc logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+oc logs -n workload-variant-autoscaler-system deployment/controller-manager
 ```
 
 #### Keep Cluster Alive After Failure
@@ -484,7 +499,7 @@ make test-e2e-smoke-with-setup
 ```bash
 kubectl get events -A --sort-by='.lastTimestamp'
 kubectl describe va -n <namespace>
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager
 ```
 
 #### Metrics Not Available
@@ -524,30 +539,9 @@ kubectl get events -n <namespace> --sort-by='.lastTimestamp'
 kubectl top nodes
 ```
 
-## Performance Testing
+## Performance / Benchmarking
 
-### Load Testing
-
-For load testing, use the consolidated E2E suite with custom load parameters:
-
-```bash
-# Kind (emulated): low / medium / heavy load
-REQUEST_RATE=8 NUM_PROMPTS=2000 make test-e2e-full
-REQUEST_RATE=20 NUM_PROMPTS=3000 make test-e2e-full
-REQUEST_RATE=40 NUM_PROMPTS=5000 make test-e2e-full
-
-# OpenShift (real cluster)
-export ENVIRONMENT=openshift
-REQUEST_RATE=20 NUM_PROMPTS=3000 make test-e2e-full
-```
-
-### Stress Testing
-
-Test system behavior under extreme conditions:
-- High request rates (50+ req/s)
-- Long-running load (30+ minutes)
-- Rapid load changes
-- Multiple concurrent variants
+Performance and benchmarking scenarios (traffic generation, throughput/latency measurement, scale-up latency, etc.) are intentionally **out of scope** for `test/e2e/` so that e2e remains deterministic. Use the project’s dedicated benchmarking tooling/workflows instead.
 
 ## Test Coverage Goals
 

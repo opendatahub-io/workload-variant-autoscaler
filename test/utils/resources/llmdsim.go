@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"strconv"
 
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -141,7 +142,7 @@ func CreateLlmdSimDeploymentWithGPU(namespace, deployName, modelName, appLabel, 
 
 	// Add GPU resource requests if specified
 	if gpusPerReplica > 0 {
-		gpuQty := resource.MustParse(fmt.Sprintf("%d", gpusPerReplica))
+		gpuQty := resource.MustParse(strconv.Itoa(gpusPerReplica))
 		container.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				gpuResourceName: gpuQty,
@@ -296,6 +297,16 @@ func CreateLlmdSimServiceMonitor(name, namespace, targetNamespace, appLabel stri
 					Port:     "http",
 					Path:     "/metrics",
 					Interval: promoperator.Duration("15s"),
+					// Propagate the llm-d.ai/variant pod label into scraped metrics.
+					// __meta_* labels are only available during target relabeling, so this
+					// must live under RelabelConfigs (not MetricRelabelConfigs).
+					RelabelConfigs: []promoperator.RelabelConfig{
+						{
+							SourceLabels: []promoperator.LabelName{"__meta_kubernetes_pod_label_llm_d_ai_variant"},
+							TargetLabel:  "llm_d_ai_variant",
+							Action:       "replace",
+						},
+					},
 				},
 			},
 			NamespaceSelector: promoperator.NamespaceSelector{

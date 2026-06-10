@@ -2,31 +2,38 @@
 FROM quay.io/projectquay/golang:1.25 AS builder
 ARG TARGETOS
 ARG TARGETARCH
-ARG APP_BUILD_ROOT
 
-## strictfipsruntime does not work with disabling CGO, which is a best practice in this case
-# ENV GOEXPERIMENT=strictfipsruntime
-ENV APP_ROOT=$APP_BUILD_ROOT
-ENV GOPATH=$APP_ROOT
+WORKDIR /workspace
+# Copy the Go Modules manifests
+COPY go.mod go.mod
+COPY go.sum go.sum
+# cache deps before building and copying source so that we don't need to re-download as much
+# and so that source changes don't invalidate our downloaded layer
+RUN go mod download
 
-WORKDIR $APP_ROOT/src/
-COPY go.mod ./
-COPY go.sum ./
+# Copy the go source
 COPY cmd/main.go cmd/main.go
 COPY api/ api/
 COPY internal/ internal/
 COPY pkg/ pkg/
-RUN go mod download && \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ${APP_ROOT}/manager cmd/main.go
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:759f5f42d9d6ce2a705e290b7fc549e2d2cd39312c4fa345f93c02e4abb8da95 AS deploy
+# Build
+# the GOARCH has not a default value to allow the binary be built according to the host where the command
+# was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
+# the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
+# by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 
-ARG VERSION
-ARG APP_BUILD_ROOT
+# Use distroless as minimal base image to package the manager binary
+# Refer to https://github.com/GoogleContainerTools/distroless for more details
+FROM gcr.io/distroless/static:nonroot
+
+LABEL org.opencontainers.image.source="https://github.com/llm-d/llm-d-workload-variant-autoscaler"
+LABEL org.opencontainers.image.description="Workload Variant Autoscaler (WVA) - GPU-aware autoscaler for LLM inference workloads"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 WORKDIR /
-COPY --from=builder ${APP_BUILD_ROOT}/manager .
-COPY LICENSE /licenses/license.txt
+COPY --from=builder /workspace/manager .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

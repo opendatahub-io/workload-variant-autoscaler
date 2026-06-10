@@ -37,11 +37,14 @@ import (
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
 
 // VariantAutoscalingReconciler reconciles a variantAutoscaling object
@@ -49,9 +52,29 @@ type VariantAutoscalingReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	Recorder  record.EventRecorder
-	Config    *config.Config      // Unified configuration (injected from main.go)
-	Datastore datastore.Datastore // Datastore for namespace tracking and InferencePool data
+	Recorder   record.EventRecorder
+	Config     *config.Config      // Unified configuration (injected from main.go)
+	Datastore  datastore.Datastore // Datastore for namespace tracking and InferencePool data
+	lwsEnabled bool                // Whether LeaderWorkerSet support is enabled (CRD detected at startup)
+}
+
+// NewVariantAutoscalingReconciler creates a new VariantAutoscalingReconciler
+func NewVariantAutoscalingReconciler(
+	client client.Client,
+	scheme *runtime.Scheme,
+	recorder record.EventRecorder,
+	cfg *config.Config,
+	ds datastore.Datastore,
+	lwsEnabled bool,
+) *VariantAutoscalingReconciler {
+	return &VariantAutoscalingReconciler{
+		Client:     client,
+		Scheme:     scheme,
+		Recorder:   recorder,
+		Config:     cfg,
+		Datastore:  ds,
+		lwsEnabled: lwsEnabled,
+	}
 }
 
 // +kubebuilder:rbac:groups=llmd.ai,resources=variantautoscalings,verbs=get;list;watch;create;update;patch;delete
@@ -60,24 +83,27 @@ type VariantAutoscalingReconciler struct {
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes/status,verbs=get;list;update;patch;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets/scale,verbs=get;update
 // +kubebuilder:rbac:groups="apps",resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;update;list;watch
 // Note: The broad ConfigMap permission above is required for namespace-local ConfigMap overrides.
-// The controller filters by well-known names (wva-saturation-scaling-config, wva-model-scale-to-zero-config)
+// The controller filters by well-known names (wva-saturation-scaling-config, wva-model-scale-to-zero-config — deployed names include the wva- namePrefix)
 // in its predicate logic, providing effective access control.
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // Note: Namespace watch permission is required for label-based namespace opt-in for namespace-local ConfigMaps.
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch
-// +kubebuilder:rbac:groups=inference.networking.x-k8s.io;inference.networking.k8s.io,resources=inferencepools,verbs=get;watch;list
-// +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=inference.networking.x-k8s.io;inference.networking.k8s.io,resources=inferencepools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update
 
 const (
 	// ServiceMonitor constants for watching controller's own metrics ServiceMonitor
-	defaultServiceMonitorName = "workload-variant-autoscaler-controller-manager-metrics-monitor"
+	defaultServiceMonitorName = "wva-controller-manager-metrics-monitor"
 )
 
 var (
@@ -106,9 +132,11 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				"namespace", req.Namespace)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Unable to fetch VariantAutoscaling",
+		errorType := "Unable to fetch VariantAutoscaling"
+		logger.Error(err, errorType,
 			"name", req.Name,
 			"namespace", req.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -135,14 +163,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		"modelID", va.Spec.ModelID)
 
 	// Attempts to resolve the target model variant using scaleTargetRef
-
-	// Fetch scale target Deployment
 	scaleTargetName := va.GetScaleTargetName()
-
-	var deployment appsv1.Deployment
-	if err := utils.GetDeploymentWithBackoff(ctx, r.Client, scaleTargetName, va.Namespace, &deployment); err != nil {
+	if _, err := scaletarget.FetchScaleTarget(ctx, r.Client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("Scale target Deployment not found, waiting for deployment watch",
+			logger.Info(fmt.Sprintf("Scale target %s not found, waiting for %s watch", va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Kind),
 				"name", scaleTargetName,
 				"namespace", va.Namespace)
 
@@ -151,20 +175,25 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				llmdVariantAutoscalingV1alpha1.TypeTargetResolved,
 				metav1.ConditionFalse,
 				llmdVariantAutoscalingV1alpha1.ReasonTargetNotFound,
-				fmt.Sprintf("Scale target Deployment %s not found", scaleTargetName))
+				fmt.Sprintf("Scale target %s %s not found", va.Spec.ScaleTargetRef.Kind, scaleTargetName))
 
 			if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
-				logger.Error(err, "Failed to update VariantAutoscaling status")
+				errorType := "Failed to update VariantAutoscaling status"
+				logger.Error(err, errorType)
+				metrics.RecordError(constants.ComponentController, errorType)
 				return ctrl.Result{}, err
 			}
 
-			// Don't requeue - the deployment watch will trigger reconciliation
-			// when the target deployment is created
+			// Don't requeue - the scale target watch will trigger reconciliation
+			// when the scale target is created
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Failed to get scale target Deployment",
+		errorType := "Failed to get scale target"
+		logger.Error(err, errorType,
 			"name", scaleTargetName,
-			"namespace", va.Namespace)
+			"namespace", va.Namespace,
+			"scale target", va.Spec.ScaleTargetRef.Kind)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -173,10 +202,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		llmdVariantAutoscalingV1alpha1.TypeTargetResolved,
 		metav1.ConditionTrue,
 		llmdVariantAutoscalingV1alpha1.ReasonTargetFound,
-		fmt.Sprintf("Scale target Deployment %s found", scaleTargetName))
+		fmt.Sprintf("Scale target %s %s found", va.Spec.ScaleTargetRef.Kind, scaleTargetName))
 
 	logger.V(logging.DEBUG).Info(
-		fmt.Sprintf("Scale target Deployment found: name=%s, namespace=%s", scaleTargetName, va.Namespace),
+		fmt.Sprintf("Scale target %s found: name=%s, namespace=%s", va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace),
 	)
 
 	// Process Engine Decisions from Shared Cache
@@ -198,7 +227,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// Only update DesiredOptimizedAlloc if we have a valid accelerator (required by CRD).
 		// Note: numReplicas may legitimately be 0 for scale-to-zero scenarios.
 		// Replace the entire struct to ensure all required fields are included in the patch.
-		if accelerator != "" {
+		// IsAcceleratorResolved (rather than a bare empty-string check) also rejects the
+		// internal sentinel value, providing defense in depth against the engine cache
+		// ever propagating it here.
+		if constants.IsAcceleratorResolved(accelerator) {
 			va.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 				NumReplicas: numReplicas,
 				Accelerator: accelerator,
@@ -234,8 +266,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// and the CRD validates the partial patch — rejecting it when required
 	// fields (numReplicas, accelerator) are absent. See: #731
 	if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
-		logger.Error(err, "Failed to update VariantAutoscaling status",
+		errorType := "Failed to update VariantAutoscaling status"
+		logger.Error(err, errorType,
 			"name", va.Name)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -253,7 +287,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 // the base is left unchanged so the zero-valued struct is not included.
 func fullDesiredAllocPatchBase(originalVA *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) *llmdVariantAutoscalingV1alpha1.VariantAutoscaling {
 	base := originalVA.DeepCopy()
-	if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+	if constants.IsAcceleratorResolved(va.Status.DesiredOptimizedAlloc.Accelerator) {
 		// Zero out the base so the entire modified desiredOptimizedAlloc
 		// appears as a change and is fully included in the merge patch.
 		base.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{}
@@ -276,7 +310,11 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 	// Use indexed lookup for VA targeting this Deployment
 	va, err := indexers.FindVAForDeployment(ctx, r.Client, deploy.Name, deploy.Namespace)
 	if err != nil {
-		logger.Error(err, "Failed to find VA for deployment event using index")
+		errorType := "Failed to find VA for deployment event using index"
+		logger.Error(err, errorType,
+			"deployment", deploy.Name,
+			"namespace", deploy.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return nil
 	}
 
@@ -297,9 +335,49 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 	}}
 }
 
+// handleLeaderWorkerSetEvent maps LeaderWorkerSet events to VA reconcile requests.
+// When a LeaderWorkerSet is created, this finds any VAs that reference it and triggers reconciliation.
+// This handles the race condition where VA is created before its target leaderWorkerSet.
+// Uses custom indexes for efficient VA lookup instead of listing all VAs.
+func (r *VariantAutoscalingReconciler) handleLeaderWorkerSetEvent(ctx context.Context, obj client.Object) []reconcile.Request {
+	lws, ok := obj.(*lwsv1.LeaderWorkerSet)
+	if !ok {
+		return nil
+	}
+
+	logger := ctrl.LoggerFrom(ctx)
+
+	// Use indexed lookup for VA targeting this LeaderWorkerSet
+	va, err := indexers.FindVAForLeaderWorkerSet(ctx, r.Client, lws.Name, lws.Namespace)
+	if err != nil {
+		errorType := "Failed to find VA for leaderWorkerSet event using index"
+		logger.Error(err, errorType,
+			"leaderWorkerSet", lws.Name,
+			"namespace", lws.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
+		return nil
+	}
+
+	if va == nil {
+		return nil
+	}
+
+	logger.V(logging.DEBUG).Info("LeaderWorkerSet created, triggering VA reconciliation",
+		"leaderWorkerSet", lws.Name,
+		"va", va.Name,
+		"namespace", lws.Namespace)
+
+	return []reconcile.Request{{
+		NamespacedName: client.ObjectKey{
+			Namespace: lws.Namespace,
+			Name:      va.Name,
+		},
+	}}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VariantAutoscalingReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
 		For(&llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
 			// Filter VAs by controller-instance label and namespace exclusion
 			builder.WithPredicates(VariantAutoscalingPredicate(mgr.GetClient(), r.Config)),
@@ -316,8 +394,19 @@ func (r *VariantAutoscalingReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Watches(
 			&appsv1.Deployment{},
 			handler.EnqueueRequestsFromMapFunc(r.handleDeploymentEvent),
-			builder.WithPredicates(DeploymentPredicate()),
-		).
+			builder.WithPredicates(ScaleTargetPredicate()),
+		)
+
+	// Only watch LeaderWorkerSet if LWS support is enabled (CRD detected at startup)
+	if r.lwsEnabled {
+		controllerBuilder = controllerBuilder.Watches(
+			&lwsv1.LeaderWorkerSet{},
+			handler.EnqueueRequestsFromMapFunc(r.handleLeaderWorkerSetEvent),
+			builder.WithPredicates(ScaleTargetPredicate()),
+		)
+	}
+
+	return controllerBuilder.
 		// Watch DecisionTrigger channel for Engine decisions
 		// This enables the Engine to trigger reconciliation without updating the object in API server
 		WatchesRawSource(

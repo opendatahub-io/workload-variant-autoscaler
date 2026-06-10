@@ -11,6 +11,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 var _ = Describe("V2 Engine Integration", func() {
@@ -138,15 +139,15 @@ var _ = Describe("V2 Engine Integration", func() {
 	})
 })
 
-var _ = Describe("getRoleFromDeployment", func() {
+var _ = Describe("getRoleFromScaleTarget", func() {
 
-	It("should return 'both' for nil deployment", func() {
-		Expect(getRoleFromDeployment(nil)).To(Equal("both"))
+	It("should return 'both' for nil scale target", func() {
+		Expect(getRoleFromScaleTarget(nil)).To(Equal("both"))
 	})
 
-	It("should return 'both' for deployment without labels", func() {
+	It("should return 'both' for scale target without labels", func() {
 		deploy := &appsv1.Deployment{}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("both"))
 	})
 
 	It("should return 'prefill' for prefill label", func() {
@@ -154,7 +155,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"llm-d.ai/role": "prefill",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("prefill"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("prefill"))
 	})
 
 	It("should return 'decode' for decode label", func() {
@@ -162,7 +163,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"llm-d.ai/role": "decode",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("decode"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("decode"))
 	})
 
 	It("should return 'both' for unknown role value", func() {
@@ -170,7 +171,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"llm-d.ai/role": "unknown",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("both"))
 	})
 
 	It("should return 'both' when no role label present", func() {
@@ -178,27 +179,35 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"app": "vllm",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("both"))
 	})
 })
 
 var _ = Describe("resolveSaturationConfig", func() {
 
-	It("should return model-specific config when present", func() {
+	It("should merge model-specific override onto default", func() {
 		configMap := map[string]config.SaturationScalingConfig{
 			"default": {
-				KvCacheThreshold: 0.80,
-				AnalyzerName:     "saturation",
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "saturation",
 			},
 			"llama-70b#production": {
 				KvCacheThreshold: 0.85,
 				Priority:         5.0,
-				AnalyzerName:     "saturation",
 			},
 		}
 		cfg := resolveSaturationConfig(configMap, "llama-70b", "production")
+		// Overridden fields
 		Expect(cfg.KvCacheThreshold).To(Equal(0.85))
 		Expect(cfg.Priority).To(Equal(5.0))
+		// Inherited from default
+		Expect(cfg.QueueLengthThreshold).To(Equal(5.0))
+		Expect(cfg.KvSpareTrigger).To(Equal(0.10))
+		Expect(cfg.QueueSpareTrigger).To(Equal(3.0))
+		Expect(cfg.AnalyzerName).To(Equal("saturation"))
 	})
 
 	It("should fall back to default config when model-specific not found", func() {
@@ -213,11 +222,14 @@ var _ = Describe("resolveSaturationConfig", func() {
 		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
 	})
 
-	It("should return zero-value with defaults when map is empty", func() {
+	It("should return V1 defaults when map is empty", func() {
 		configMap := map[string]config.SaturationScalingConfig{}
 		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
 		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
-		Expect(cfg.KvCacheThreshold).To(Equal(0.0))
+		Expect(cfg.KvCacheThreshold).To(Equal(config.DefaultKvCacheThreshold))
+		Expect(cfg.QueueLengthThreshold).To(Equal(config.DefaultQueueLengthThreshold))
+		Expect(cfg.KvSpareTrigger).To(Equal(config.DefaultKvSpareTrigger))
+		Expect(cfg.QueueSpareTrigger).To(Equal(config.DefaultQueueSpareTrigger))
 	})
 
 	It("should apply defaults on model-specific config", func() {
@@ -230,6 +242,27 @@ var _ = Describe("resolveSaturationConfig", func() {
 		Expect(cfg.ScaleUpThreshold).To(Equal(config.DefaultScaleUpThreshold))
 		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary))
 		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
+		// V1 defaults also applied
+		Expect(cfg.KvCacheThreshold).To(Equal(config.DefaultKvCacheThreshold))
+	})
+
+	It("should allow partial override with only one field changed", func() {
+		configMap := map[string]config.SaturationScalingConfig{
+			"default": {
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+			},
+			"model-1#ns-1": {
+				KvCacheThreshold: 0.90,
+			},
+		}
+		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
+		Expect(cfg.KvCacheThreshold).To(Equal(0.90))
+		Expect(cfg.QueueLengthThreshold).To(Equal(5.0))
+		Expect(cfg.KvSpareTrigger).To(Equal(0.10))
+		Expect(cfg.QueueSpareTrigger).To(Equal(3.0))
 	})
 })
 

@@ -1,0 +1,59 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wva-system
+
+namePrefix: wva-
+
+resources:
+- ../../../base/
+# OpenShift's user-workload-monitoring Prometheus needs cluster-monitoring-view
+# permissions to scrape the controller's secure /metrics endpoint.
+- prometheus-adapter-monitoring.yaml
+- metrics-reader-token.yaml
+# Allow ingress to the WVA controller pods in namespaces with restrictive
+# default-deny NetworkPolicies (e.g. redhat-ods-applications).
+- allow-metrics-traffic.yaml
+
+components:
+- ../../../components/namespace-scoped/
+
+patches:
+# Point WVA at the in-cluster Thanos Querier (OpenShift's user-workload-monitoring
+# stack) and tighten TLS verification — the Service CA certificate is mounted
+# from /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt by the
+# deployment patch below.
+- path: configmap-patch.yaml
+  target:
+    kind: ConfigMap
+    name: manager-config
+- path: deployment-patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
+# Move the Prometheus auth subject to OpenShift's user-workload-monitoring SA.
+- patch: |-
+    - op: replace
+      path: /subjects/0
+      value:
+        kind: ServiceAccount
+        name: prometheus-user-workload
+        namespace: openshift-user-workload-monitoring
+  target:
+    kind: ClusterRoleBinding
+    name: prometheus-metrics-auth-rolebinding
+- path: monitor-auth-patch.yaml
+  target:
+    kind: ServiceMonitor
+    name: controller-manager-metrics-monitor
+# ODH/RHDS: skip operator reconcile of the saturation ConfigMap.
+- patch: |-
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: saturation-scaling-config
+      annotations:
+        opendatahub.io/managed: "false"
+  target:
+    kind: ConfigMap
+    name: saturation-scaling-config

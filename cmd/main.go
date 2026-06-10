@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	goflag "flag"
 	"fmt"
 	"net/http"
@@ -31,12 +32,14 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	flag "github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -44,6 +47,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
@@ -56,14 +60,17 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/crd"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	corev1 "k8s.io/api/core/v1"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	inferencePoolV1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	inferencePoolV1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
-	//+kubebuilder:scaffold:imports
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -76,7 +83,11 @@ func init() {
 	utilruntime.Must(promoperator.AddToScheme(scheme))
 	utilruntime.Must(inferencePoolV1.Install(scheme))
 	utilruntime.Must(inferencePoolV1alpha2.Install(scheme))
-	//+kubebuilder:scaffold:scheme
+	// KEDA scheme is registered unconditionally so the client can list ScaledObjects
+	// when the CRD is present. Listing fails gracefully (NoMatchError) when not installed.
+	utilruntime.Must(kedav1alpha1.AddToScheme(scheme))
+	// Note: LeaderWorkerSet scheme is added conditionally in main() after checking if CRD exists
+	// +kubebuilder:scaffold:scheme
 }
 
 // nolint:gocyclo
@@ -149,9 +160,30 @@ func main() {
 	cfg, err := config.Load(flag.CommandLine, *configFilePath)
 	if err != nil {
 		setupLog.Error(err, "failed to load configuration - this is a fatal error")
-		os.Exit(1)
+		logging.Sync() //nolint:errcheck
+		os.Exit(1)     //nolint:gocritic // exitAfterDefer: Sync() called explicitly above
 	}
 	setupLog.Info("Configuration loaded successfully")
+
+	// Conditionally add LeaderWorkerSet scheme if CRD exists
+	lwsEnabled := crd.CheckLeaderWorkerSetCRD(restConfig, setupLog)
+	if lwsEnabled {
+		if err := lwsv1.AddToScheme(scheme); err != nil {
+			setupLog.Error(err, "failed to add LeaderWorkerSet scheme")
+			os.Exit(1)
+		}
+		setupLog.Info("LeaderWorkerSet CRD detected - support enabled")
+	} else {
+		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
+	}
+
+	// Detect KEDA for annotation-based ScaledObject discovery (dual-mode, Phase 1)
+	kedaEnabled := crd.CheckKEDACRD(restConfig, setupLog)
+	if kedaEnabled {
+		setupLog.Info("KEDA ScaledObject CRD detected - annotation-based ScaledObject discovery enabled")
+	} else {
+		setupLog.Info("KEDA ScaledObject CRD not found - annotation-based discovery limited to HPAs")
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -200,7 +232,7 @@ func main() {
 		TLSOpts: webhookTLSOpts,
 	})
 
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
+	// Metrics endpoint is enabled in 'config/base/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
@@ -213,7 +245,7 @@ func main() {
 	if cfg.SecureMetrics() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
-		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
+		// can access the metrics endpoint. The RBAC are configured in 'config/base/rbac/kustomization.yaml'. More info:
 		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
@@ -223,9 +255,9 @@ func main() {
 	// this setup is not recommended for production.
 	//
 	// TODO(user): If you enable certManager, uncomment the following lines:
-	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
+	// - [METRICS-WITH-CERTS] at config/base/kustomization.yaml to generate and use certificates
 	// managed by cert-manager for the metrics server.
-	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
+	// - [PROMETHEUS-WITH-CERTS] at config/base/monitoring/kustomization.yaml for TLS certification.
 	if len(cfg.MetricsCertPath()) > 0 {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metricsCertPath", cfg.MetricsCertPath(),
@@ -292,6 +324,27 @@ func main() {
 		mgrOptions.Cache = cache.Options{
 			DefaultNamespaces: map[string]cache.Config{
 				watchNS: {},
+			},
+		}
+	} else {
+		// Multi-namespace mode: Use label selector to filter ConfigMaps in the cache
+		// This significantly reduces memory usage by only caching WVA-related configmaps
+		wvaConfigSelector := labels.SelectorFromSet(labels.Set{
+			"app.kubernetes.io/name": "workload-variant-autoscaler",
+		})
+
+		setupLog.Info("Configuring cache with label selector for ConfigMaps",
+			"labelSelector", wvaConfigSelector.String())
+
+		// Configure cache to only watch configmaps with the WVA labels
+		// Other resource types are cached normally without filtering
+		mgrOptions.Cache = cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {
+					// Empty map means cache all namespaces, but filter by label
+					Namespaces: map[string]cache.Config{},
+					Label:      wvaConfigSelector,
+				},
 			},
 		}
 	}
@@ -425,18 +478,39 @@ func main() {
 	}
 
 	// Create the reconciler with unified Config and datastore
-	reconciler := &controller.VariantAutoscalingReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
-		Config:    cfg, // Pass unified Config to reconciler
-		Datastore: ds,  // Pass datastore for namespace tracking
-	}
+	reconciler := controller.NewVariantAutoscalingReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
+		cfg,
+		ds,
+		lwsEnabled,
+	)
 
 	// Setup the controller with the manager
 	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller")
 		os.Exit(1)
+	}
+
+	// HPAReconciler: tracks namespaces for annotation-based discovery (always registered).
+	if err = (&controller.HPAReconciler{
+		Client:    mgr.GetClient(),
+		Datastore: ds,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create HPA controller")
+		os.Exit(1)
+	}
+
+	// ScaledObjectReconciler: registered only when KEDA CRD is present.
+	if kedaEnabled {
+		if err = (&controller.ScaledObjectReconciler{
+			Client:    mgr.GetClient(),
+			Datastore: ds,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create ScaledObject controller")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
@@ -491,7 +565,7 @@ func main() {
 		if syncErr != "" {
 			return fmt.Errorf("initial ConfigMap bootstrap not complete: %s", syncErr)
 		}
-		return fmt.Errorf("initial ConfigMap bootstrap not complete")
+		return errors.New("initial ConfigMap bootstrap not complete")
 	}); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)

@@ -35,7 +35,7 @@ func (e *Engine) optimizeQueueingModel(
 	e.queueingModelAnalyzer.Update(currentModelKeys)
 
 	// Stage 1: Collect ModelScalingRequests for all models
-	var requests []pipeline.ModelScalingRequest
+	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -64,7 +64,7 @@ func (e *Engine) optimizeQueueingModel(
 			data.replicaMetrics, qConfig, data.variantStates)
 		if err != nil {
 			logger.Error(err, "Queueing model analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
 			continue
 		}
 

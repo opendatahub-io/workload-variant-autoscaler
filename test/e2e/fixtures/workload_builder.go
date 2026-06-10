@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strconv"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -16,7 +17,19 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-//go:embed scripts/burst_load_generator.sh
+// Load-generation helpers build Kubernetes Jobs used by test/benchmark (parallel
+// curl workers, burst batches, optional guidellm). The e2e suite does not call
+// these APIs; e2e uses bounded, deterministic jobs (for example saturation
+// trigger flows) instead.
+//
+// This file lives under test/e2e/fixtures next to shared cluster helpers
+// (EnsureModelService, HPA, etc.) that benchmarks already import. A later
+// refactor may move load-only code and the embedded script into a dedicated
+// package such as test/loadgen for clearer ownership. The script lives in this
+// directory (not fixtures/scripts/) so //go:embed matches reliably for vet/gopls.
+// hack/burst_load_generator.sh is a symlink to this file for docs and CLI use.
+
+//go:embed burst_load_generator.sh
 var burstLoadGeneratorScript string
 
 // Burst load configuration constants
@@ -55,7 +68,7 @@ func CreateLoadJob(
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app":           name + "-load",
-				"test-resource": "true",
+				"test-resource": defaultTestResourceLabelValue,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -64,7 +77,7 @@ func CreateLoadJob(
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"app":           name + "-load",
-						"test-resource": "true",
+						"test-resource": defaultTestResourceLabelValue,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -111,7 +124,7 @@ func buildLoadGeneratorArgs(targetURL string, cfg LoadConfig) []string {
 		"benchmark",
 		"--target", targetURL,
 		"--rate-type", "constant",
-		"--rate", fmt.Sprintf("%d", cfg.RequestRate),
+		"--rate", strconv.Itoa(cfg.RequestRate),
 		"--model", cfg.ModelID,
 	}
 
@@ -119,7 +132,7 @@ func buildLoadGeneratorArgs(targetURL string, cfg LoadConfig) []string {
 	// For constant rate: max-seconds should be enough to send all prompts
 	// Add buffer to ensure all requests are sent
 	maxSeconds := (cfg.NumPrompts / cfg.RequestRate) + 10 // Add 10s buffer
-	args = append(args, "--max-seconds", fmt.Sprintf("%d", maxSeconds))
+	args = append(args, "--max-seconds", strconv.Itoa(maxSeconds))
 
 	switch cfg.Strategy {
 	case "synthetic":
@@ -170,8 +183,12 @@ func EnsureBurstLoadJob(
 	loadCfg LoadConfig,
 ) error {
 	jobName := name + "-load"
-	existing, err := k8sClient.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
-	if err == nil && existing != nil {
+	_, err := k8sClient.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing Job %s: %w", jobName, err)
+		}
+	} else {
 		deleteErr := k8sClient.BatchV1().Jobs(namespace).Delete(ctx, jobName, metav1.DeleteOptions{})
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing Job %s: %w", jobName, deleteErr)
@@ -183,8 +200,6 @@ func EnsureBurstLoadJob(
 		if waitErr != nil {
 			return fmt.Errorf("timeout waiting for Job %s deletion: %w", jobName, waitErr)
 		}
-	} else if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing Job %s: %w", jobName, err)
 	}
 	job := buildBurstLoadJob(namespace, name, targetServiceURL, loadCfg)
 	_, err = k8sClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
@@ -199,7 +214,7 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app":           name + "-load",
-				"test-resource": "true",
+				"test-resource": defaultTestResourceLabelValue,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -208,7 +223,7 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"app":           name + "-load",
-						"test-resource": "true",
+						"test-resource": defaultTestResourceLabelValue,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -222,19 +237,19 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 							Env: []corev1.EnvVar{
 								{
 									Name:  "TOTAL_REQUESTS",
-									Value: fmt.Sprintf("%d", loadCfg.NumPrompts),
+									Value: strconv.Itoa(loadCfg.NumPrompts),
 								},
 								{
 									Name:  "BATCH_SIZE",
-									Value: fmt.Sprintf("%d", burstBatchSize),
+									Value: strconv.Itoa(burstBatchSize),
 								},
 								{
 									Name:  "CURL_TIMEOUT",
-									Value: fmt.Sprintf("%d", burstCurlTimeoutSeconds),
+									Value: strconv.Itoa(burstCurlTimeoutSeconds),
 								},
 								{
 									Name:  "MAX_TOKENS",
-									Value: fmt.Sprintf("%d", loadCfg.OutputTokens),
+									Value: strconv.Itoa(loadCfg.OutputTokens),
 								},
 								{
 									Name:  "BATCH_SLEEP",
@@ -354,8 +369,8 @@ exit 0
 			Namespace: namespace,
 			Labels: map[string]string{
 				"experiment":    experimentLabel,
-				"worker":        fmt.Sprintf("%d", workerID),
-				"test-resource": "true",
+				"worker":        strconv.Itoa(workerID),
+				"test-resource": defaultTestResourceLabelValue,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -364,8 +379,8 @@ exit 0
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"experiment":    experimentLabel,
-						"worker":        fmt.Sprintf("%d", workerID),
-						"test-resource": "true",
+						"worker":        strconv.Itoa(workerID),
+						"test-resource": defaultTestResourceLabelValue,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -378,23 +393,23 @@ exit 0
 							Env: []corev1.EnvVar{
 								{
 									Name:  "WORKER_ID",
-									Value: fmt.Sprintf("%d", workerID),
+									Value: strconv.Itoa(workerID),
 								},
 								{
 									Name:  "TOTAL_REQUESTS",
-									Value: fmt.Sprintf("%d", loadCfg.NumPrompts),
+									Value: strconv.Itoa(loadCfg.NumPrompts),
 								},
 								{
 									Name:  "BATCH_SIZE",
-									Value: fmt.Sprintf("%d", parallelBatchSize),
+									Value: strconv.Itoa(parallelBatchSize),
 								},
 								{
 									Name:  "CURL_TIMEOUT",
-									Value: fmt.Sprintf("%d", parallelCurlTimeoutSeconds),
+									Value: strconv.Itoa(parallelCurlTimeoutSeconds),
 								},
 								{
 									Name:  "MAX_TOKENS",
-									Value: fmt.Sprintf("%d", loadCfg.OutputTokens),
+									Value: strconv.Itoa(loadCfg.OutputTokens),
 								},
 								{
 									Name:  "BATCH_SLEEP",

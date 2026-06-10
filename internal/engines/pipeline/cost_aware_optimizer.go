@@ -12,6 +12,11 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
+const (
+	// CostAwareOptimizerName is the identifier for the cost-aware optimizer
+	CostAwareOptimizerName = "cost-aware"
+)
+
 // CostAwareOptimizer is a per-model optimizer that minimizes total cost while
 // meeting capacity requirements. It processes each model independently:
 //
@@ -31,7 +36,7 @@ func NewCostAwareOptimizer() *CostAwareOptimizer {
 
 // Name returns the optimizer identifier.
 func (o *CostAwareOptimizer) Name() string {
-	return "cost-aware"
+	return CostAwareOptimizerName
 }
 
 // Optimize produces VariantDecisions for all models.
@@ -59,7 +64,7 @@ func (o *CostAwareOptimizer) Optimize(
 			costAwareScaleDown(ctx, req.Result, targets, stateMap)
 		}
 
-		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "cost-aware")
+		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, CostAwareOptimizerName)
 		logger.V(logging.DEBUG).Info("Cost-aware optimizer decisions",
 			"modelID", req.ModelID,
 			"decisions", len(decisions))
@@ -106,7 +111,7 @@ func costAwareScaleUp(
 			}
 		}
 
-		targets[vc.VariantName] = targets[vc.VariantName] + replicasNeeded
+		targets[vc.VariantName] += replicasNeeded
 		remaining -= float64(replicasNeeded) * vc.PerReplicaCapacity
 
 		logger.V(logging.DEBUG).Info("Scale-up allocation",
@@ -292,18 +297,21 @@ func buildDecisionsWithOptimizer(
 		}
 
 		decisions = append(decisions, interfaces.VariantDecision{
-			VariantName:     name,
-			ModelID:         req.ModelID,
-			Namespace:       req.Namespace,
-			AcceleratorName: vc.AcceleratorName,
-			Cost:            vc.Cost,
-			Role:            state.Role,
-			CurrentReplicas: state.CurrentReplicas,
-			TargetReplicas:  target,
-			Action:          action,
-			Reason:          reason,
-			MinReplicas:     state.MinReplicas,
-			MaxReplicas:     state.MaxReplicas,
+			VariantName:      name,
+			ModelID:          req.ModelID,
+			Namespace:        req.Namespace,
+			AcceleratorName:  vc.AcceleratorName,
+			Cost:             vc.Cost,
+			Role:             state.Role,
+			CurrentReplicas:  state.CurrentReplicas,
+			TargetReplicas:   target,
+			Action:           action,
+			Reason:           reason,
+			MinReplicas:      state.MinReplicas,
+			MaxReplicas:      state.MaxReplicas,
+			Utilization:      vc.Utilization,
+			SpareCapacity:    1.0 - vc.Utilization,
+			RequiredCapacity: req.Result.RequiredCapacity,
 		})
 	}
 	return decisions
