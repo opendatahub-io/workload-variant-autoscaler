@@ -36,6 +36,8 @@ func CreateTLSConfig(cfg *config.Config) (*tls.Config, error) {
 		MinVersion:         tls.VersionTLS12, // Enforce minimum TLS version - https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/security_and_compliance/tls-security-profiles#:~:text=requires%20a%20minimum-,TLS%20version%20of%201.2,-.
 	}
 
+	config.NextProtos = []string{"h2", "http/1.1"}
+
 	if insecureSkipVerify {
 		ctrl.Log.V(logging.VERBOSE).Info("TLS certificate verification is disabled, skipping certificate loading")
 		return config, nil
