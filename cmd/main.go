@@ -50,6 +50,7 @@ import (
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -58,6 +59,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/coordinator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/coordinator/plugins/gpurebalance"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/throughput"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/scalefromzero"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
@@ -91,6 +93,25 @@ func init() {
 	utilruntime.Must(kedav1alpha1.AddToScheme(scheme))
 	// Note: LeaderWorkerSet scheme is added conditionally in main() after checking if CRD exists
 	// +kubebuilder:scaffold:scheme
+}
+
+// throughputAnalyzerEnabled reports whether any saturation config entry lists
+// the throughput analyzer with enabled != false. Startup-time gate: when no
+// entry enables throughput the analyzer is never registered, so it cannot
+// participate in scaling decisions and cannot veto scale-down.
+//
+// This is a stopgap until the per-cycle consumption gate (effectiveEnabled
+// opt-in fix) lands. Runtime enablement after controller start requires a
+// restart because RegisterAnalyzer is frozen after StartOptimizeLoop.
+func throughputAnalyzerEnabled(cfg *config.Config) bool {
+	for _, sc := range cfg.SaturationConfig() {
+		for _, aw := range sc.Analyzers {
+			if aw.Name == throughput.AnalyzerName && (aw.Enabled == nil || *aw.Enabled) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // nolint:gocyclo
@@ -460,6 +481,13 @@ func main() {
 			sourceRegistry,
 			cfg, // Pass unified Config to engine
 		)
+		if throughputAnalyzerEnabled(cfg) {
+			registration.RegisterThroughputAnalyzerQueries(sourceRegistry)
+			if err := engine.RegisterAnalyzer(throughput.AnalyzerName, throughput.NewThroughputAnalyzer()); err != nil {
+				return err
+			}
+			setupLog.Info("ThroughputAnalyzer registered (enabled in saturation config)")
+		}
 		go engine.StartOptimizeLoop(ctx)
 		return nil
 	}))

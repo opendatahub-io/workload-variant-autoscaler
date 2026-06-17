@@ -14,6 +14,9 @@ const SaturationAnalyzerName = "saturation"
 // RoleBoth represents the default role when a variant serves both prefill and decode.
 const RoleBoth = "both"
 
+// RolePrefill represents the prefill-only role in a P/D disaggregated deployment.
+const RolePrefill = "prefill"
+
 // ReplicaMetrics holds per-replica metrics used by both the saturation analyzer
 // and the queueing model analyzer. Saturation analysis uses KV cache, queue, and
 // token-capacity fields, while the queueing model analyzer uses
