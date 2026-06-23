@@ -637,7 +637,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 
 			Expect(decisions).To(HaveLen(1))
-			Expect(decisions[0].Reason).To(ContainSubstring("greedy-by-score"))
+			Expect(decisions[0].Reason()).To(ContainSubstring("greedy-by-score"))
 		})
 	})
 

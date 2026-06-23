@@ -245,7 +245,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			"metricsAvailable", decision.MetricsAvailable,
 			"metricsReason", decision.MetricsReason,
 			"metricsMessage", decision.MetricsMessage,
-			"reason", decision.Reason)
+			"reason", decision.Reason())
 		// Only apply if the decision is fresher than the last one applied or if we haven't applied it
 		// Note: We blindly apply for now, assuming the Engine acts as the source of truth for "Desired" state
 		numReplicas, accelerator, lastRunTime := common.DecisionToOptimizedAlloc(decision)

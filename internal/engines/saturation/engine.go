@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -754,6 +753,49 @@ func (e *Engine) analyzeRoleGroups(
 	return modelDecisions
 }
 
+// selectV2Optimizer chooses the optimizer and GPU constraints for a V2
+// optimization cycle.
+//
+// When the configured optimizer is GreedyByScore it is GPU-aware and expects
+// per-type resource constraints. Those constraints are computed from the GPU
+// limiter's inventory. GreedyByScore interprets absent constraints as zero
+// available capacity (deny-all), NOT as unlimited — so if it were run with
+// empty constraints it would silently suppress all scale-up.
+//
+// Therefore, whenever real constraints cannot be obtained — the limiter does
+// not provide constraints (no ConstraintProvider), or computing them failed
+// because, e.g., node objects are not readable on this cluster — we fall back
+// to the cost-aware optimizer, which is the engine's unlimited path (the same
+// optimizer used when enableLimiter is false), so scale-up proceeds
+// unconstrained instead of being blocked. A constraint that is present but
+// reports zero GPUs is left intact:
+// that is a genuine "no capacity" signal and should still block scale-up.
+func (e *Engine) selectV2Optimizer(
+	ctx context.Context,
+	requests []pipeline.ModelScalingRequest,
+) (pipeline.ScalingOptimizer, []*pipeline.ResourceConstraints) {
+	logger := ctrl.LoggerFrom(ctx)
+
+	// GreedyByScore is currently the only GPU-aware optimizer; any future
+	// constraint-consuming optimizer must be added to this guard.
+	optimizer := e.optimizer
+	if _, ok := optimizer.(*pipeline.GreedyByScoreOptimizer); !ok {
+		return optimizer, nil
+	}
+
+	provider, ok := e.GPULimiter.(pipeline.ConstraintProvider)
+	if !ok {
+		return pipeline.NewCostAwareOptimizer(), nil
+	}
+
+	constraint, err := provider.ComputeConstraints(ctx, computeCurrentGPUUsage(requests))
+	if err != nil {
+		logger.Error(err, "Failed to compute GPU constraints, falling back to unlimited (cost-aware) optimizer for this cycle")
+		return pipeline.NewCostAwareOptimizer(), nil
+	}
+	return optimizer, []*pipeline.ResourceConstraints{constraint}
+}
+
 // optimizeV2 runs the V2 token-based optimizer path (saturation-token-based).
 // Collects AnalyzerResults for all models, calls the optimizer once, then applies enforcer per-model.
 func (e *Engine) optimizeV2(
@@ -819,22 +861,11 @@ func (e *Engine) optimizeV2(
 	}
 
 	// Stage 2: Compute GPU constraints and call optimizer
-	var constraints []*pipeline.ResourceConstraints
-	if _, ok := e.optimizer.(*pipeline.GreedyByScoreOptimizer); ok {
-		currentUsage := computeCurrentGPUUsage(requests)
-		if limiter, ok := e.GPULimiter.(*pipeline.DefaultLimiter); ok {
-			constraint, err := limiter.ComputeConstraints(ctx, currentUsage)
-			if err != nil {
-				logger.Error(err, "Failed to compute GPU constraints, falling back to unlimited")
-			} else {
-				constraints = append(constraints, constraint)
-			}
-		}
-	}
-	allDecisions := e.optimizer.Optimize(ctx, requests, constraints)
+	optimizer, constraints := e.selectV2Optimizer(ctx, requests)
+	allDecisions := optimizer.Optimize(ctx, requests, constraints)
 
 	logger.Info("V2 optimizer produced decisions",
-		"optimizer", e.optimizer.Name(),
+		"optimizer", optimizer.Name(),
 		"decisionCount", len(allDecisions),
 		"modelCount", len(requests))
 
@@ -851,7 +882,7 @@ func (e *Engine) optimizeV2(
 
 		scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
 			ctx, req.ModelID, req.Namespace,
-			allDecisions, scaleToZeroConfig, e.optimizer.Name(),
+			allDecisions, scaleToZeroConfig, optimizer.Name(),
 		)
 		if scaledToZero {
 			logger.Info("Scale-to-zero enforcement applied (V2)",
@@ -1037,16 +1068,15 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			TargetReplicas:         targetReplicas,
 			OriginalTargetReplicas: targetReplicas, // Store original before limiter modifies it
 			DesiredReplicas:        state.DesiredReplicas,
-			Action:                 action,
 			SaturationBased:        true,
 			SaturationOnly:         true,
 			ModelBasedDecision:     false,
 			SafetyOverride:         false,
-			Reason:                 "saturation-only mode: " + string(action),
 			GPUsPerReplica:         gpusPerReplica,
 			MinReplicas:            state.MinReplicas,
 			MaxReplicas:            state.MaxReplicas,
 		}
+		decision.SetDecisionReason(action, interfaces.DecisionReasonSaturationOnly, fmt.Sprintf("%s: %s", string(interfaces.DecisionReasonSaturationOnly), string(action)))
 
 		if va != nil {
 			decision.AcceleratorName = va.AcceleratorName
@@ -1359,7 +1389,7 @@ func (e *Engine) applySaturationDecisions(
 		if hasDecision {
 			targetReplicas = decision.TargetReplicas
 			acceleratorName = decision.AcceleratorName
-			reason = decision.Reason
+			reason = decision.Reason()
 		} else {
 			// No change/decision: Keep current target or default to current replicas
 			// We effectively explicitly "decide" to keep things as they are if no decision was made
@@ -1433,7 +1463,7 @@ func (e *Engine) applySaturationDecisions(
 		// cycle.
 		if !constants.IsAcceleratorResolved(acceleratorName) {
 			e.emitAcceleratorNotResolvedEvent(&updateVa)
-			logger.V(logging.DEBUG).Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
+			logger.V(logging.DEBUG).Info("Accelerator name not resolved - replica scaling metrics emitted with accelerator_type=\"unresolved\"; accelerator-specific saturation/capacity metrics withheld",
 				"variant", vaName)
 		}
 
@@ -1505,13 +1535,13 @@ func (e *Engine) applySaturationDecisions(
 		// 	isSaturationOnly = decision.SaturationOnly
 		// }
 
-		// Skip metric emission when accelerator is unresolved to avoid publishing
-		// wva_* gauges under an empty or incorrect accelerator_type label.
-		// Status updates and conditions still proceed so the controller can reconcile.
-		if !constants.IsAcceleratorResolved(acceleratorName) {
-			logger.V(logging.DEBUG).Info("Skipping metric emission - no accelerator name available",
-				"variant", updateVa.Name)
-		} else if err := act.EmitMetrics(ctx, &updateVa); err != nil {
+		// Always emit the replica scaling signal (the HPA/KEDA external metric).
+		// EmitReplicaMetrics labels an unresolved accelerator as the bounded
+		// "unresolved" value (never the internal sentinel), so the scaling signal
+		// is never withheld; the scaler matches on variant/namespace rather than
+		// accelerator_type, so it keeps working regardless. Accelerator-dimensioned
+		// metrics (saturation/capacity) remain gated on resolution below.
+		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
 			msg := "Failed to emit metrics for external autoscalers"
 			// K8s best practice: events should reference the current resource version
 			e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{updateVa}, msg)
@@ -1520,9 +1550,9 @@ func (e *Engine) applySaturationDecisions(
 			// Only log detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
 			if hasDecision {
 				// Emit Kubernetes event for observability
-				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason)
+				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason())
 				if decision.WasLimited {
-					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
+					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason())
 				}
 
 				logger.Info("Successfully emitted metrics",
@@ -1534,12 +1564,14 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		// Record saturation and capacity metrics when this cycle produced a
-		// fresh decision for the variant. When there is no fresh decision the
-		// existing series persist with their last-recorded values until
-		// Prometheus' staleness marker fires; surfacing freshness on the
+		// fresh decision for the variant. These series carry the accelerator_type
+		// label, so they are emitted only when the type is resolved — otherwise
+		// the internal sentinel would leak into a label. When there is no fresh
+		// decision the existing series persist with their last-recorded values
+		// until Prometheus' staleness marker fires; surfacing freshness on the
 		// dashboard side is tracked in #1082 (an explicit "up" gauge per VA,
 		// rather than deleting series here).
-		if hasDecision {
+		if hasDecision && constants.IsAcceleratorResolved(acceleratorName) {
 			act.RecordSaturationMetrics(ctx, decision)
 		}
 
@@ -1553,10 +1585,12 @@ func (e *Engine) applySaturationDecisions(
 			//   for this variant during this loop (metrics pipeline is working).
 			// - hasDecision is true when the optimizer produced a scaling decision based on
 			//   saturation metrics in this run.
-			// - The accelerator must also be resolved: when it is the sentinel, the
-			//   metric-emission branch above is skipped (no wva_* gauges are published),
-			//   so reporting MetricsAvailable=True would leave HPA/KEDA-side reasoning
-			//   inconsistent with controller-side reporting.
+			// - The accelerator must also be resolved: the replica scaling gauges are
+			//   always emitted (with an "unresolved" accelerator_type) so scaling is not
+			//   blocked, but the accelerator-dimensioned saturation/capacity metrics are
+			//   only emitted when the type is resolved. MetricsAvailable therefore tracks
+			//   full (accelerator-dimensioned) observability, and is False until the
+			//   accelerator resolves even though scaling itself proceeds.
 			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
 			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
 			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
@@ -1590,9 +1624,7 @@ func (e *Engine) applySaturationDecisions(
 
 		if hasDecision {
 			if decision.Action != interfaces.ActionNoChange {
-				// Sanitize reason to prevent Prometheus cardinality explosion from dynamic numeric values
-				sanitizedReason := sanitizeReasonForMetrics(reason, decision.Action)
-				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, string(decision.Action), sanitizedReason); err != nil {
+				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, decision.Action, decision.ReasonCategory()); err != nil {
 					logger.Error(err, "Failed to emit replica scaling metrics")
 				}
 			}
@@ -1603,58 +1635,6 @@ func (e *Engine) applySaturationDecisions(
 				"target", targetReplicas,
 				"reason", reason)
 		}
-	}
-}
-
-// sanitizeReasonForMetrics converts detailed reason strings into bounded categorical
-// values safe for use as Prometheus label values. This prevents cardinality explosion
-// from dynamic numeric values embedded in reason strings.
-// TODO: look fragile, refactor this function for better solution
-func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction) string {
-	// Check for saturation-only mode patterns
-	if strings.Contains(reason, "saturation-only mode:") {
-		switch action {
-		case interfaces.ActionScaleUp:
-			return "saturation-only mode: scale-up"
-		case interfaces.ActionScaleDown:
-			return "saturation-only mode: scale-down"
-		default:
-			return "saturation-only mode: no-change"
-		}
-	}
-
-	// Check for scale-from-zero pattern
-	if strings.Contains(reason, "scalefromzero") {
-		switch action {
-		case interfaces.ActionScaleUp:
-			return "scalefromzero: scale-up"
-		case interfaces.ActionScaleDown:
-			return "scalefromzero: scale-down"
-		default:
-			return "scalefromzero: no-change"
-		}
-	}
-
-	// Check for V2 optimizer patterns (cost-aware, greedy-by-score, enforced)
-	if strings.Contains(reason, "V2") {
-		switch action {
-		case interfaces.ActionScaleUp:
-			return "V2 scale-up"
-		case interfaces.ActionScaleDown:
-			return "V2 scale-down"
-		default:
-			return "V2 no-change"
-		}
-	}
-
-	// Default fallback based on action
-	switch action {
-	case interfaces.ActionScaleUp:
-		return "scale-up"
-	case interfaces.ActionScaleDown:
-		return "scale-down"
-	default:
-		return "no-change"
 	}
 }
 
@@ -1669,7 +1649,8 @@ func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alp
 		"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
 			utils.AcceleratorNameLabel+". "+
 			"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
-			"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
+			"Replica scaling metrics are still emitted with accelerator_type=\"unresolved\" so HPA/KEDA can scale; "+
+			"accelerator-specific saturation/capacity metrics are withheld until the accelerator is resolved.")
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
@@ -1731,9 +1712,12 @@ func (e *Engine) emitSafetyNetMetrics(
 			}
 		}
 		if !constants.IsAcceleratorResolved(accelerator) {
-			logger.Info("Safety net: skipping metric emission - no accelerator name available",
+			// Do NOT withhold the scaling signal: EmitReplicaMetrics labels an
+			// unresolved accelerator with the bounded "unresolved" value, so the
+			// safety-net signal still reaches HPA/KEDA (which match on
+			// variant/namespace, not accelerator_type). Mirrors the main path.
+			logger.V(logging.DEBUG).Info("Safety net: accelerator unresolved, emitting scaling signal with 'unresolved' accelerator_type",
 				"variant", va.Name)
-			continue
 		}
 
 		// Emit safety net metrics
