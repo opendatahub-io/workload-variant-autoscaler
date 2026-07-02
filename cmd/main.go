@@ -192,19 +192,10 @@ func main() {
 	locator.SetKEDAEnabled(kedaEnabled)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
-	// due to its vulnerabilities. More specifically, disabling http/2 will
-	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
-	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
-		c.NextProtos = []string{"http/1.1"}
-	}
-
-	var tlsOpts []func(*tls.Config)
-	if !cfg.EnableHTTP2() {
-		tlsOpts = append(tlsOpts, disableHTTP2)
+	tlsOpts := []func(*tls.Config){
+		func(c *tls.Config) {
+			c.NextProtos = []string{"h2", "http/1.1"}
+		},
 	}
 
 	// Create watchers for metrics and webhooks certificates
