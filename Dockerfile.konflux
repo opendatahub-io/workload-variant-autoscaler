@@ -1,6 +1,6 @@
 ARG APP_BUILD_ROOT=/opt/app-root
 
-FROM registry.access.redhat.com/ubi9/go-toolset:1.25.8@sha256:8c5aeac74b4b60dc2e5e44f6b639186b7ec2fec8f0eb9a36d4a32dcf8e255f52 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.26.4-1783628461@sha256:9748bb0b8e3376e9b155a4db3fbdfbfd20057b449ea9b3aed367b2f967cdfe1b AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
