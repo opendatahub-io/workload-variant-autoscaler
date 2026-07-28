@@ -1417,3 +1417,45 @@ var _ = Describe("k2SourceLabel", func() {
 		Expect(k2SourceLabel(nil)).To(Equal(""))
 	})
 })
+
+var _ = Describe("aggregateByVariant DP>1 with pending replicas", func() {
+	var (
+		analyzer *SaturationAnalyzer
+		ctx      context.Context
+	)
+
+	BeforeEach(func() {
+		analyzer = NewSaturationAnalyzer(NewCapacityKnowledgeStore())
+		ctx = context.Background()
+	})
+
+	It("converts pending pods to instance units in anticipated supply", func() {
+		// One ready pod hosts 8 DP-rank instances (8 ReplicaMetrics sharing a
+		// PodName). State: 1 ready + 1 pending pod → instances-per-pod = 8/1 = 8,
+		// so the pending pod must count as 8 instances, not 1.
+		metrics := make([]domain.ReplicaMetrics, 0, 8)
+		for i := 0; i < 8; i++ {
+			metrics = append(metrics, makeReplicaMetrics("pod-1", "decode-v1", "H100", 10.0,
+				8000, 16000, 0, 100, 50))
+		}
+
+		input := makeAnalyzerInput(
+			metrics,
+			[]domain.VariantReplicaState{
+				{VariantName: "decode-v1", CurrentReplicas: 2, PendingReplicas: 1, GPUsPerReplica: 8},
+			},
+		)
+
+		result, err := analyzer.Analyze(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.VariantCapacities).To(HaveLen(1))
+
+		vc := result.VariantCapacities[0]
+		Expect(vc.ReplicaCount).To(Equal(8))    // 8 scraped instances
+		Expect(vc.PendingReplicas).To(Equal(8)) // 1 pending pod × 8 instances-per-pod
+
+		// TotalAnticipatedSupply = (ReplicaCount + PendingReplicas) × PerReplicaCapacity
+		want := float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
+		Expect(result.TotalAnticipatedSupply).To(Equal(want))
+	})
+})

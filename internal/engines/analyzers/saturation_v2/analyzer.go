@@ -363,15 +363,43 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			readyCount = 0
 		}
 
+		// replicaCount multiplies perReplicaCapacity to form TotalCapacity. It also
+		// sets VariantCapacity.ReplicaCount, which aggregation.go uses to recompute
+		// supply totals — so both must stay in sync. Defaults to readyCount (pod
+		// count) for the fallback branches, which have no per-instance data.
+		replicaCount := readyCount
+		// pendingCount must match replicaCount's unit (SumTotalAnticipatedSupply
+		// adds them); converted to instances below when replicaCount switches.
+		pendingCount := vs.PendingReplicas
+
 		var capacityLabel string
 		if len(replicas) > 0 {
-			// Use median effective capacity from ready pods
+			// len(replicas) counts vLLM engine instances (DP ranks), not pods: a DP=8
+			// pod hosts 8 independently-capacitied instances. Using the pod count would
+			// undercount TotalCapacity by the DP factor.
 			capacities := make([]int64, 0, len(replicas))
 			for _, rc := range replicas {
 				capacities = append(capacities, rc.EffectiveCapacity)
 				totalDemand += float64(rc.ReplicaDemand)
 			}
 			perReplicaCapacity = float64(median(capacities))
+			replicaCount = len(replicas)
+			// Convert pending to instance units. readyCount and vs.PendingReplicas
+			// share the scale-target unit (pods for Deployment, groups for LWS), so
+			// len(replicas)/readyCount approximates the instances-per-unit (DP)
+			// factor. This is exact only in steady state: len(replicas) is live
+			// metrics while readyCount is (lagging) scale-target status, so during a
+			// scale-up — when new instances report metrics before their unit is
+			// counted ready — the ratio is inflated and pendingCount overshoots
+			// (understating RequiredCapacity). A metrics-derived instances-per-unit
+			// (grouping by pod/LWS group) would remove this skew; tracked as a
+			// follow-up. TODO: scale-from-zero (readyCount == 0) can't infer DP at
+			// all and is left unconverted here.
+			if readyCount > 0 {
+				if instancesPerUnit := len(replicas) / readyCount; instancesPerUnit > 1 {
+					pendingCount = vs.PendingReplicas * instancesPerUnit
+				}
+			}
 			if accelerator == "" {
 				accelerator = replicas[0].AcceleratorName
 			}
@@ -389,7 +417,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			capacityLabel = satReasonNoData
 		}
 
-		totalCapacity := float64(readyCount) * perReplicaCapacity
+		totalCapacity := float64(replicaCount) * perReplicaCapacity
 
 		var utilization float64
 		if totalCapacity > 0 {
@@ -401,8 +429,8 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			AcceleratorName:    accelerator,
 			Cost:               cost,
 			Role:               vs.Role,
-			ReplicaCount:       readyCount,
-			PendingReplicas:    vs.PendingReplicas,
+			ReplicaCount:       replicaCount,
+			PendingReplicas:    pendingCount,
 			PerReplicaCapacity: perReplicaCapacity,
 			TotalCapacity:      totalCapacity,
 			TotalDemand:        totalDemand,
