@@ -9,8 +9,8 @@ metadata:
     pipelinesascode.tekton.dev/on-comment: "^/konflux-build"
     pipelinesascode.tekton.dev/on-label: "[kfbuild-all]"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main"
+    pipelinesascode.tekton.dev/on-target-branch: "[refs/tags/odh-v3.5]"
+    pipelinesascode.tekton.dev/on-event: "[push]"
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
@@ -25,7 +25,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/workload-variant-autoscaler:odh-stable
+    value: quay.io/opendatahub/workload-variant-autoscaler:odh-v3.5
   - name: dockerfile
     value: Dockerfile
   - name: path-context
