@@ -35,7 +35,7 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.38.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	knative.dev/pkg v0.0.0-20250326102644-9f3e60a9244c // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
