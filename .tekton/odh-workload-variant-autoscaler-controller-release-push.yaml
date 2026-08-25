@@ -27,7 +27,7 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/workload-variant-autoscaler:v3.6-ea1
   - name: dockerfile
-    value: Dockerfile
+    value: Dockerfile.konflux
   - name: path-context
     value: .
   pipelineRef:
