@@ -13,8 +13,8 @@ metadata:
       == "release-v3.6-ea1"
   creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-workload-variant-autoscaler-controller-ci
+    appstudio.openshift.io/application: opendatahub-release
+    appstudio.openshift.io/component: workload-variant-autoscaler
     pipelines.appstudio.openshift.io/type: build
   name: odh-workload-variant-autoscaler-controller-on-release-push
   namespace: open-data-hub-tenant
