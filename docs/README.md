@@ -35,6 +35,7 @@ Welcome to the WVA documentation! This directory contains comprehensive guides f
 ### Benchmark Guide
 
 - **[Benchmark Guide](developer-guide/benchmark-guide.md)** - Running WVA scaling benchmarks
+- **[The `run-benchmark` Skill](developer-guide/run-benchmark-skill.md)** - Claude Code skill that drives the `benchmark/` KEDA test bed lifecycle
 
 ## Quick Links
 

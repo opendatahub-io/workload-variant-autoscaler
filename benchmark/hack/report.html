@@ -1,0 +1,1868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark dashboard</title>
+<style>
+  /* ---------------------------------------------------------------------
+     Palette: CSS custom properties, light default + dark via media query
+     and an explicit [data-theme] override (see dataviz skill palette.md).
+     --------------------------------------------------------------------- */
+  html { color-scheme: light; }
+  .viz-root {
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline-axis:  #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --success-text:   #006300;
+
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #9a5cd0;
+
+    --status-good:     #0ca30c;
+    --status-warning:  #b8860b;
+    --status-serious:  #ec835a;
+    --status-critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) { color-scheme: dark; }
+    :root:not([data-theme="light"]) .viz-root {
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline-axis:  #383835;
+      --border:         rgba(255,255,255,0.10);
+      --success-text:   #0ca30c;
+
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #b184e8;
+      --status-warning: #e0b030;
+    }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  :root[data-theme="dark"] .viz-root {
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline-axis:  #383835;
+    --border:         rgba(255,255,255,0.10);
+    --success-text:   #0ca30c;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #b184e8;
+    --status-warning: #e0b030;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root { background: var(--page-plane); color: var(--text-primary); min-height: 100vh; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: .9rem 1.5rem; background: var(--surface-1); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .topbar h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+  .topbar .subtitle { font-size: .75rem; color: var(--text-muted); }
+  .topbar .spacer { flex: 1; }
+  .topbar nav { display: flex; gap: .25rem; }
+  .topbar nav a {
+    text-decoration: none; font-size: .85rem; color: var(--text-secondary);
+    padding: .4rem .7rem; border-radius: 6px;
+  }
+  .topbar nav a.active { background: var(--page-plane); color: var(--text-primary); font-weight: 600; }
+  .topbar nav a:hover { color: var(--text-primary); }
+  button.btn, .theme-toggle {
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    border-radius: 6px; padding: .4rem .7rem; font-size: .8rem; cursor: pointer; font-family: inherit;
+  }
+  button.btn:hover, .theme-toggle:hover { color: var(--text-primary); }
+  label.auto-refresh { display: flex; align-items: center; gap: .35rem; font-size: .78rem; color: var(--text-secondary); }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: .75rem 1.5rem; background: var(--surface-1); border-bottom: 1px solid var(--border);
+  }
+  .toolbar .group { display: flex; align-items: center; gap: .5rem; }
+  .toolbar label { font-size: .8rem; color: var(--text-secondary); }
+  .toolbar input[type="number"], .search-input {
+    padding: .35rem .6rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--page-plane); color: var(--text-primary); font-size: .85rem; font-family: inherit;
+  }
+  .toolbar input[type="number"] { width: 5.5rem; }
+  .search-input { min-width: 220px; }
+  .toolbar .hint { font-size: .75rem; color: var(--text-muted); }
+  .stage-filter { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .stage-filter button {
+    border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+    border-radius: 999px; padding: .3rem .75rem; font-size: .75rem; cursor: pointer; font-family: inherit;
+  }
+  .stage-filter button[aria-pressed="true"] {
+    background: var(--page-plane); color: var(--text-primary); font-weight: 600; border-color: var(--text-secondary);
+  }
+
+  main { padding: 1.5rem 2rem 4rem; max-width: 1400px; margin: 0 auto; }
+
+  h2 { font-size: 1.25rem; margin: 0 0 .25rem; }
+  h3 { font-size: .95rem; margin: 2rem 0 .75rem; color: var(--text-primary); }
+  .panel-subtitle { color: var(--text-secondary); font-size: .85rem; margin-bottom: 1.5rem; }
+  /* Subtle divider between stacked page sections (e.g. a Sessions list and the
+     Start-a-session form below it) -- a hairline + extra top space, not a hard box. */
+  .section-break {
+    margin-top: 2.5rem; padding: 1.25rem 1.5rem 1.75rem; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--surface-1);
+  }
+  .section-break h3 { margin-top: 0; }
+  .back-link { display: inline-block; margin-bottom: 1rem; font-size: .85rem; color: var(--series-1); text-decoration: none; cursor: pointer; }
+  .back-link:hover { text-decoration: underline; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: .3rem; font-size: .7rem; font-weight: 600;
+    padding: .15rem .5rem; border-radius: 999px; border: 1px solid var(--border);
+    color: var(--text-secondary); vertical-align: middle;
+  }
+  .badge.latest { color: var(--series-1); border-color: var(--series-1); }
+  .badge.dry-run { color: var(--text-muted); }
+  .badge.stale { color: var(--status-warning); border-color: var(--status-warning); }
+
+  .stage-badge {
+    display: inline-flex; align-items: center; gap: .45rem; font-size: .74rem; font-weight: 600;
+    padding: .25rem .65rem; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap;
+  }
+  .stage-badge .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .stage-badge.tone-good { color: var(--success-text); border-color: var(--status-good); }
+  .stage-badge.tone-good .dot { background: var(--status-good); }
+  .stage-badge.tone-warning { color: var(--status-warning); border-color: var(--status-warning); }
+  .stage-badge.tone-warning .dot { background: var(--status-warning); }
+  .stage-badge.tone-critical { color: var(--status-critical); border-color: var(--status-critical); }
+  .stage-badge.tone-critical .dot { background: var(--status-critical); }
+  .stage-badge.tone-progress { color: var(--series-1); border-color: var(--series-1); }
+  .stage-badge.tone-progress .dot { background: var(--series-1); animation: pulse 1.4s ease-in-out infinite; }
+  .stage-badge.tone-muted { color: var(--text-muted); border-color: var(--border); }
+  .stage-badge.tone-muted .dot { background: var(--text-muted); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+  .flag-icons { display: flex; gap: .35rem; font-size: .8rem; }
+  .flag-icons .flag.err { color: var(--status-critical); }
+  .flag-icons .flag.warn { color: var(--status-warning); }
+
+  .row-actions { display: flex; align-items: center; gap: .5rem; justify-content: flex-end; }
+  .icon-btn {
+    background: none; border: none; cursor: pointer; color: var(--text-muted);
+    padding: .25rem; display: inline-flex; align-items: center; border-radius: 5px; line-height: 0;
+  }
+  .icon-btn:hover { color: var(--status-critical); background: var(--page-plane); }
+
+  /* ---- sessions table ---- */
+  table.sessions-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  table.sessions-table th, table.sessions-table td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--gridline); }
+  table.sessions-table th { font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); }
+  table.sessions-table tbody tr { cursor: pointer; }
+  table.sessions-table tbody tr:hover { background: var(--surface-1); }
+  /* Sessions with no benchmark data (e.g. standup-only) stay visible but muted --
+     legitimate infrastructure activity, not a failure. The session id stays readable. */
+  table.sessions-table tbody tr.session-row-muted td { color: var(--text-muted); }
+  table.sessions-table tbody tr.session-row-muted .session-id { color: var(--text-secondary); }
+  .session-id { font-weight: 600; }
+  .session-sub { font-size: .72rem; color: var(--text-muted); margin-top: .1rem; }
+  .summary-chips { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  .summary-chip {
+    display: flex; align-items: baseline; gap: .4rem; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: .5rem .9rem; font-size: .78rem; color: var(--text-secondary);
+  }
+  .summary-chip b { font-size: 1.1rem; color: var(--text-primary); }
+
+  /* ---- session detail ---- */
+  .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .9rem 1.5rem; margin: 0 0 1.5rem; }
+  .kv-grid .kv .k { font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); }
+  .kv-grid .kv .v { font-size: .9rem; margin-top: .15rem; word-break: break-word; }
+
+  /* ---- new-session form ---- */
+  select, .toolbar input[type="text"] {
+    padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); font-size: .85rem; font-family: inherit;
+  }
+  .field { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .9rem; }
+  .field label { font-size: .78rem; color: var(--text-secondary); font-weight: 600; }
+  .field .hint { font-size: .72rem; color: var(--text-muted); font-weight: 400; }
+  .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 1.25rem; }
+  .form-card { margin-bottom: 1.25rem; }
+  .form-card h3 { margin-top: 0; }
+  .kube-context-banner {
+    display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: .6rem .9rem; margin-bottom: 1.25rem;
+  }
+  .kube-context-banner code { font-weight: 600; color: var(--text-primary); }
+  .action-row { display: flex; align-items: center; gap: .75rem; }
+  .btn.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+  .btn.danger { color: var(--status-critical); border-color: var(--status-critical); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .launch-status { font-size: .82rem; color: var(--text-secondary); }
+  .launch-status.error { color: var(--status-critical); }
+
+  .timeline { display: flex; align-items: center; flex-wrap: wrap; margin: 1rem 0 1.75rem; }
+  .timeline .step { display: flex; align-items: center; gap: .5rem; font-size: .78rem; color: var(--text-muted); padding: .3rem .5rem; }
+  .timeline .step .icon { width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--gridline); font-size: 10px; }
+  .timeline .step.done { color: var(--text-primary); }
+  .timeline .step.done .icon { background: var(--status-good); border-color: var(--status-good); color: #fff; }
+  .timeline .step.current { color: var(--series-1); font-weight: 600; }
+  .timeline .step.current .icon { border-color: var(--series-1); color: var(--series-1); }
+  .timeline .step.failed { color: var(--status-critical); font-weight: 600; }
+  .timeline .step.failed .icon { background: var(--status-critical); border-color: var(--status-critical); color: #fff; }
+  .timeline .sep { width: 24px; height: 1px; background: var(--gridline); }
+
+  .log-tabs { display: flex; gap: .5rem; margin-bottom: .5rem; align-items: center; }
+  .log-tabs button {
+    border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+    border-radius: 6px; padding: .25rem .65rem; font-size: .75rem; cursor: pointer; font-family: inherit;
+  }
+  .log-tabs button[aria-pressed="true"] { background: var(--surface-1); color: var(--text-primary); font-weight: 600; }
+  .log-tabs .raw-link { margin-left: auto; font-size: .75rem; }
+  pre.log-view {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1rem;
+    font-size: .74rem; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    color: var(--text-secondary);
+  }
+
+  /* ---- stat tiles / cards (shared with experiment + compare views) ---- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; }
+  .tile { background: var(--page-plane); border: 1px solid var(--border); border-radius: 10px; padding: .9rem 1rem; }
+  .tile .label { font-size: .75rem; color: var(--text-secondary); }
+  .tile .value { font-size: 1.4rem; font-weight: 600; margin-top: .15rem; }
+  .tile .value.muted { color: var(--text-muted); font-size: 1.05rem; }
+  .tile .sub { font-size: .72rem; color: var(--text-muted); margin-top: .15rem; }
+  .tile.highlight .value { color: var(--series-1); }
+
+  .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1rem; }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
+  .card { background: var(--page-plane); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem 1.1rem; }
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .5rem; }
+  .card-head .title { font-size: .82rem; font-weight: 600; }
+  .card-head .unit { font-size: .72rem; color: var(--text-muted); }
+  .table-toggle {
+    font-size: .7rem; border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+    border-radius: 5px; padding: .2rem .5rem; cursor: pointer; font-family: inherit;
+  }
+  .table-toggle:hover { color: var(--text-primary); }
+
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .bar { cursor: pointer; }
+  .bar:focus { outline: 2px solid var(--text-secondary); outline-offset: 2px; }
+  .bar.placeholder { fill: transparent; stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .gridline { stroke: var(--gridline); stroke-width: 1; }
+  .axis-line { stroke: var(--baseline-axis); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 10px; }
+  .value-label { fill: var(--text-secondary); font-size: 10px; }
+  .cat-label { fill: var(--text-secondary); font-size: 10.5px; }
+  .na-label { fill: var(--text-muted); font-size: 10px; font-style: italic; }
+
+  .legend { display: flex; gap: 1rem; flex-wrap: wrap; margin: .5rem 0 1.25rem; font-size: .78rem; color: var(--text-secondary); }
+  .legend .item { display: flex; align-items: center; gap: .4rem; }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 2px; }
+
+  table.data-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+  table.data-table th, table.data-table td {
+    text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--gridline);
+    font-variant-numeric: tabular-nums;
+  }
+  table.data-table th { color: var(--text-secondary); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; }
+  table.data-table td.best { font-weight: 600; }
+  table.data-table td.na { color: var(--text-muted); font-style: italic; }
+  .hidden { display: none !important; }
+
+  /* ---- system-status strip (topbar): cluster / Prometheus / Grafana reachability ---- */
+  .sys-status { display: flex; align-items: center; gap: .4rem; }
+  .sys-chip {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .72rem; font-weight: 600;
+    padding: .2rem .55rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary);
+    cursor: default; white-space: nowrap;
+  }
+  .sys-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+  .sys-chip.tone-good { color: var(--success-text); border-color: var(--status-good); }
+  .sys-chip.tone-good .dot { background: var(--status-good); }
+  .sys-chip.tone-critical { color: var(--status-critical); border-color: var(--status-critical); }
+  .sys-chip.tone-critical .dot { background: var(--status-critical); }
+  .sys-chip .loc { color: var(--text-muted); font-weight: 400; text-transform: uppercase; font-size: .6rem; }
+  .pf-gear {
+    background: none; border: none; cursor: pointer; color: inherit; opacity: .8;
+    margin-left: .2rem; padding: .15rem; font-size: 1.05rem; line-height: 1;
+    font-family: inherit; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .pf-gear:hover { opacity: 1; background: var(--page-plane); }
+  .drift-flag { color: var(--status-warning); margin-left: .15rem; }
+  .pf-panel {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    padding: .6rem 1.5rem; background: var(--surface-1); border-bottom: 1px solid var(--border); font-size: .8rem;
+  }
+  .pf-panel.hidden { display: none; }
+  .pf-panel-title { font-weight: 600; margin-right: .1rem; }
+  .pf-panel select, .pf-panel input[type="text"], .pf-panel input[type="number"] {
+    padding: .3rem .5rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--page-plane); color: var(--text-primary); font-size: .8rem; font-family: inherit;
+  }
+  .pf-manual { display: flex; gap: .35rem; align-items: center; }
+  .pf-manual input[type="number"] { width: 4.5rem; }
+
+  .status-row { display: flex; align-items: center; gap: 1.25rem; margin: .5rem 0 1.5rem; }
+  .status-chip { display: flex; align-items: center; gap: .4rem; font-size: .85rem; }
+  .status-chip .icon { width: 16px; height: 16px; flex-shrink: 0; }
+  .status-chip.good { color: var(--success-text); }
+  .status-chip.critical { color: var(--status-critical); }
+  .status-bar { flex: 1; height: 10px; border-radius: 5px; overflow: hidden; display: flex; background: var(--gridline); min-width: 120px; max-width: 320px; }
+  .status-bar .seg-good { background: var(--status-good); }
+  .status-bar .seg-critical { background: var(--status-critical); }
+
+  .fail-cat-bar { display: flex; align-items: center; gap: .5rem; }
+  .fail-cat-bar .track { flex: 1; height: 6px; border-radius: 3px; background: var(--gridline); min-width: 60px; max-width: 140px; overflow: hidden; }
+  .fail-cat-bar .fill { height: 100%; background: var(--status-critical); }
+  .fail-cat-bar .pct { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.data-table td.fail-msg { color: var(--text-secondary); font-size: .76rem; max-width: 32rem; white-space: pre-wrap; word-break: break-word; }
+  table.data-table td.fail-msg:empty::before { content: '—'; color: var(--text-muted); }
+
+  .note {
+    display: flex; gap: .6rem; align-items: flex-start; background: var(--page-plane);
+    border: 1px solid var(--border); border-left: 3px solid var(--status-warning);
+    border-radius: 8px; padding: .8rem 1rem; margin: 1rem 0; font-size: .82rem; color: var(--text-secondary);
+  }
+  .note strong { color: var(--text-primary); }
+
+  .links a, a.link { color: var(--series-1); }
+  .raw-files-list { list-style: none; margin: .5rem 0 0; padding: 0; font-size: .8rem; }
+  .raw-files-list li { display: flex; justify-content: space-between; gap: 1rem; padding: .35rem 0; border-bottom: 1px solid var(--gridline); }
+  .raw-files-list .size { color: var(--text-muted); flex-shrink: 0; }
+
+  .experiment-card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); margin-bottom: 1.25rem; overflow: hidden; }
+  .experiment-card .exp-head { display: flex; align-items: center; gap: .75rem; padding: .9rem 1.1rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .experiment-card .exp-head .exp-id { font-weight: 600; font-size: .88rem; }
+  .experiment-card .exp-head .exp-sub { font-size: .75rem; color: var(--text-muted); }
+  .experiment-card .exp-body { padding: 1.1rem; }
+
+  .compare-groups { display: flex; flex-direction: column; gap: .75rem; }
+  .compare-group-card {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); padding: 1rem 1.2rem;
+    cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;
+  }
+  .compare-group-card:hover { border-color: var(--text-secondary); }
+  .compare-group-card .title { font-weight: 600; }
+  .compare-group-card .sub { font-size: .78rem; color: var(--text-muted); margin-top: .2rem; }
+
+  .empty-state { padding: 2.5rem 1rem; text-align: center; color: var(--text-muted); font-size: .85rem; }
+  .empty-state span { font-size: .78rem; }
+  .load-error { padding: 2rem; color: var(--status-critical); font-size: .9rem; }
+  .load-error code { background: var(--surface-1); padding: .1em .35em; border-radius: 4px; }
+
+  .tooltip {
+    position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface-1);
+    font-size: .75rem; padding: .4rem .6rem; border-radius: 6px; z-index: 100; opacity: 0;
+    transition: opacity .08s ease; max-width: 220px; line-height: 1.4;
+  }
+  .tooltip.show { opacity: 1; }
+  .tooltip .t-val { font-weight: 700; }
+  .tooltip .t-key { color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+
+  <div class="topbar">
+    <h1>Benchmark dashboard</h1>
+    <nav id="top-nav">
+      <a href="#/" data-view="specs">Specs</a>
+      <a href="#/compare" data-view="compare">Compare</a>
+    </nav>
+    <span class="subtitle" id="workspace-info"></span>
+    <div class="sys-status" id="sys-status"></div>
+    <div class="spacer"></div>
+    <label class="auto-refresh"><input type="checkbox" id="auto-refresh" checked> Auto-refresh</label>
+    <button class="btn" id="refresh-btn" type="button">Refresh</button>
+    <button class="theme-toggle" id="theme-toggle" type="button">Theme: Auto</button>
+  </div>
+
+  <div class="pf-panel hidden" id="pf-panel"></div>
+
+  <div class="toolbar">
+    <div class="group">
+      <label for="slo-ttft">Goodput SLO — TTFT ≤</label>
+      <input type="number" id="slo-ttft" value="1000" min="0" step="50">
+      <span class="hint">ms</span>
+    </div>
+    <div class="group">
+      <label for="slo-itl">ITL ≤</label>
+      <input type="number" id="slo-itl" value="80" min="0" step="5">
+      <span class="hint">ms</span>
+    </div>
+    <span class="hint">Goodput = successful req/s meeting both thresholds, interpolated from the percentile table (assumes TTFT/ITL independence).</span>
+  </div>
+
+  <main id="app"></main>
+</div>
+
+<div class="tooltip" id="tooltip" role="tooltip"></div>
+
+<script>
+/* =========================================================================
+   Data: fetched live from /index.json, produced by
+   benchmark/hack/benchmark_report.py's `index`/`serve` commands scanning a
+   llmdbenchmark --workspace (default benchmark/results). Nothing in this
+   file is sample data -- an empty workspace renders an empty dashboard.
+
+   Vocabulary: a "session" is one workspace directory (<user>-<timestamp>/),
+   i.e. one lifecycle instance that moves through the plan -> standup ->
+   smoketest -> run -> teardown phases. "run" is reserved for the
+   data-producing run phase and its experiments; a session that only stood
+   infrastructure up is a valid session with no benchmark data.
+   ========================================================================= */
+let MANIFEST = { sessions: [] };
+let route = { view: 'specs' };
+let stageFilter = 'all';
+let searchQuery = '';
+let autoRefreshTimer = null;
+
+const PCT_ORDER = ['p50', 'p75', 'p90', 'p95', 'p99', 'p99_9'];
+const PCT_LABELS = { p50: 'P50', p75: 'P75', p90: 'P90', p95: 'P95', p99: 'P99', p99_9: 'P99.9' };
+const PCT_FRACTIONS = { p0_1: .001, p1: .01, p5: .05, p10: .10, p25: .25, p50: .50, p75: .75, p90: .90, p95: .95, p99: .99, p99_9: .999 };
+
+const STAGE_STYLE = {
+  planned:           { tone: 'muted',    step: 'plan' },
+  standing_up:       { tone: 'progress', step: 'standup' },
+  standup_failed:    { tone: 'critical', step: 'standup' },
+  stood_up:          { tone: 'progress', step: 'standup' },
+  smoketest_passed:  { tone: 'progress', step: 'smoketest' },
+  smoketest_failed:  { tone: 'critical', step: 'smoketest' },
+  running:           { tone: 'progress', step: 'run' },
+  stalled:           { tone: 'warning',  step: 'run' },
+  run_failed:        { tone: 'critical', step: 'run' },
+  completed:         { tone: 'good',     step: 'results' },
+  completed_partial: { tone: 'warning',  step: 'results' },
+  completed_failed:  { tone: 'critical', step: 'results' },
+  torn_down:         { tone: 'muted',    step: 'teardown' },
+  teardown_failed:   { tone: 'critical', step: 'teardown' },
+};
+const STAGE_IS_FAILURE = new Set(['standup_failed', 'smoketest_failed', 'run_failed', 'completed_failed', 'teardown_failed', 'stalled']);
+// What a session is waiting on next, keyed by stage -- drives the "Next step" banner + inline
+// actions on the session-detail page. Each phase always lands in a *new* sibling session
+// directory (llmdbenchmark mints a fresh timestamped workspace per invocation), so these
+// actions launch a new session rather than mutating this one.
+const NEXT_STEP = {
+  standup_failed:    { message: 'Standup failed. Check the log below, then retry.', actions: ['standup', 'teardown'] },
+  stood_up:          { message: 'Standup complete. Ready to run a workload, or tear down.', actions: ['run', 'teardown'] },
+  smoketest_passed:  { message: 'Standup + smoketest complete. Ready to run a workload, or tear down.', actions: ['run', 'teardown'] },
+  smoketest_failed:  { message: 'Smoketest failed. Check the log below, then retry standup or tear down.', actions: ['standup', 'teardown'] },
+  stalled:           { message: 'No log activity for a while -- the harness may have crashed or is still starting. Run again, or tear down.', actions: ['run', 'teardown'] },
+  run_failed:        { message: 'The run failed before producing results. Check the log below, then retry or tear down.', actions: ['run', 'teardown'] },
+  completed:         { message: 'Run complete. Run another workload, or tear down when done.', actions: ['run', 'teardown'] },
+  completed_partial: { message: 'Run complete, with some failed requests. Run another workload, or tear down.', actions: ['run', 'teardown'] },
+  completed_failed:  { message: 'Run completed but every request failed. Check the results below, then retry or tear down.', actions: ['run', 'teardown'] },
+  teardown_failed:   { message: 'Teardown failed. Check the log below, then retry.', actions: ['teardown'] },
+};
+const STAGE_GROUPS = {
+  active:    new Set(['standing_up', 'running']),        // a phase subprocess is executing
+  waiting:   new Set(['stood_up', 'smoketest_passed']),  // settled at a phase boundary, ready for the next phase
+  attention: new Set(['stalled', 'standup_failed', 'smoketest_failed', 'run_failed', 'teardown_failed', 'completed_failed']),
+  completed: new Set(['completed', 'completed_partial']),
+  torn_down: new Set(['torn_down']),
+};
+// Rollup bucket for a session. The two "waiting" stages (stood_up /
+// smoketest_passed) count as in-progress only while still active; once stale
+// they've settled as standing infrastructure — a legitimate, finished
+// standup-only session, not work still underway.
+function sessionGroup(s) {
+  const st = s.stage;
+  if (STAGE_GROUPS.torn_down.has(st)) return 'torn_down';
+  if (STAGE_GROUPS.completed.has(st)) return 'completed';
+  if (STAGE_GROUPS.attention.has(st)) return 'attention';
+  if (STAGE_GROUPS.active.has(st)) return 'in_progress';
+  if (STAGE_GROUPS.waiting.has(st)) return s.is_stale ? 'infrastructure' : 'in_progress';
+  return 'other'; // planned / unknown
+}
+const TIMELINE_STEPS = [
+  ['plan', 'Plan'], ['standup', 'Standup'], ['smoketest', 'Smoketest'],
+  ['run', 'Run'], ['results', 'Results'], ['teardown', 'Teardown'],
+];
+const PALETTE = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
+const TRASH_ICON_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+  <path d="M3 4h10M6.5 4V2.5a1 1 0 011-1h1a1 1 0 011 1V4M4.5 4l.5 9a1 1 0 001 1h4a1 1 0 001-1l.5-9"
+    fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+/* ---- formatting ---------------------------------------------------------- */
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+function fmtMs(v) { if (v == null) return '—'; return v >= 1000 ? (v / 1000).toFixed(2) + ' s' : Math.round(v) + ' ms'; }
+function fmtReq(v) { return v == null ? '—' : v.toFixed(3) + ' req/s'; }
+function fmtPct(v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; }
+function fmtBytes(n) {
+  if (n == null) return '—';
+  const units = ['B', 'KB', 'MB', 'GB']; let i = 0, v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v < 10 && i > 0 ? 1 : 0) + ' ' + units[i];
+}
+function fmtDuration(s) {
+  if (s == null) return '—';
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  let out = '';
+  if (h) out += h + 'h ';
+  if (h || m) out += m + 'm ';
+  out += sec + 's';
+  return out;
+}
+function fmtRelative(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const diffS = Math.round((Date.now() - d.getTime()) / 1000);
+  if (diffS < 5) return 'just now';
+  if (diffS < 0) return 'just now';
+  if (diffS < 60) return diffS + 's ago';
+  if (diffS < 3600) return Math.round(diffS / 60) + 'm ago';
+  if (diffS < 86400) return Math.round(diffS / 3600) + 'h ago';
+  return Math.round(diffS / 86400) + 'd ago';
+}
+function resultsUrl(relPath) { return 'results/' + relPath.split('/').map(encodeURIComponent).join('/'); }
+
+/* ---- derived metrics ------------------------------------------------------ */
+function interpCdf(pctTable, x) {
+  if (!pctTable || pctTable.p50 == null) return 0;
+  const points = Object.keys(PCT_FRACTIONS)
+    .filter(k => pctTable[k] != null)
+    .map(k => [pctTable[k], PCT_FRACTIONS[k]])
+    .sort((a, b) => a[0] - b[0]);
+  if (!points.length) return 0;
+  if (x <= points[0][0]) return 0;
+  if (x >= points[points.length - 1][0]) return 1;
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1], [x1, y1] = points[i];
+    if (x <= x1) return y0 + (x - x0) / (x1 - x0) * (y1 - y0);
+  }
+  return 1;
+}
+function successRateOf(m) {
+  if (!m) return null;
+  const total = (m.success_count || 0) + (m.failure_count || 0);
+  return total ? m.success_count / total : null;
+}
+function throughputOf(exp) {
+  const m = exp.metrics;
+  if (!m) return null;
+  if (m.throughput_req_per_sec != null) return m.throughput_req_per_sec;
+  if (exp.harness_delta_seconds) return m.success_count / exp.harness_delta_seconds;
+  return null;
+}
+function goodputOf(exp, ttftSlo, itlSlo) {
+  const m = exp.metrics;
+  if (!m || !m.ttft_ms || !m.itl_ms) return null;
+  const thr = throughputOf(exp);
+  if (thr == null) return null;
+  return thr * interpCdf(m.ttft_ms, ttftSlo) * interpCdf(m.itl_ms, itlSlo);
+}
+function sloInputs() {
+  return [Number(document.getElementById('slo-ttft').value), Number(document.getElementById('slo-itl').value)];
+}
+
+/* ---- tooltip -------------------------------------------------------------- */
+const tooltipEl = document.getElementById('tooltip');
+function showTooltip(evt, keyText, valText) {
+  tooltipEl.innerHTML = '';
+  const val = document.createElement('span'); val.className = 't-val'; val.textContent = valText;
+  const key = document.createElement('span'); key.className = 't-key'; key.textContent = ' ' + keyText;
+  tooltipEl.appendChild(val); tooltipEl.appendChild(key);
+  tooltipEl.classList.add('show');
+  positionTooltip(evt);
+}
+function positionTooltip(evt) {
+  const x = evt.clientX ?? (evt.target.getBoundingClientRect().left + evt.target.getBoundingClientRect().width / 2);
+  const y = evt.clientY ?? evt.target.getBoundingClientRect().top;
+  tooltipEl.style.left = Math.min(x + 12, window.innerWidth - 230) + 'px';
+  tooltipEl.style.top = Math.max(y - 36, 8) + 'px';
+}
+function hideTooltip() { tooltipEl.classList.remove('show'); }
+
+/* ---- SVG bar chart --------------------------------------------------------
+   bars: [{ label, value (number|null), color }]
+---------------------------------------------------------------------------- */
+function roundedTopRectPath(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  if (h <= 0) return '';
+  return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
+}
+function renderBarChart(container, { bars, fmt, height = 150 }) {
+  const width = 280, padL = 8, padR = 8, padT = 18, padB = 26;
+  const plotW = width - padL - padR, plotH = height - padT - padB;
+  const values = bars.map(b => b.value).filter(v => v != null);
+  const maxV = Math.max(1, ...values) * 1.15;
+  const n = bars.length;
+  const slot = plotW / n;
+  const barW = Math.min(24, slot * 0.55);
+
+  const gridSteps = 3;
+  let gridSvg = '';
+  for (let i = 0; i <= gridSteps; i++) {
+    const gy = padT + plotH - (i / gridSteps) * plotH;
+    gridSvg += `<line class="gridline" x1="${padL}" x2="${width - padR}" y1="${gy}" y2="${gy}"/>`;
+  }
+
+  let barsSvg = '', labelsSvg = '';
+  bars.forEach((b, i) => {
+    const cx = padL + slot * i + slot / 2;
+    const label = `<text class="cat-label" x="${cx}" y="${height - 6}" text-anchor="middle">${esc(b.label)}</text>`;
+    if (b.value == null) {
+      const h = plotH * 0.28;
+      const y = padT + plotH - h;
+      barsSvg += `<rect class="bar placeholder" x="${cx - barW / 2}" y="${y}" width="${barW}" height="${h}" rx="4"
+        tabindex="0" role="img" aria-label="${esc(b.label)}: not available"
+        data-key="${esc(b.label)}" data-val="N/A"/>`;
+      labelsSvg += `<text class="na-label" x="${cx}" y="${y - 5}" text-anchor="middle">N/A</text>`;
+    } else {
+      const h = (b.value / maxV) * plotH;
+      const y = padT + plotH - h;
+      barsSvg += `<path class="bar" d="${roundedTopRectPath(cx - barW / 2, y, barW, h, 4)}" fill="${b.color}"
+        tabindex="0" role="img" aria-label="${esc(b.label)}: ${esc(fmt(b.value))}"
+        data-key="${esc(b.label)}" data-val="${esc(fmt(b.value))}"/>`;
+      labelsSvg += `<text class="value-label" x="${cx}" y="${y - 5}" text-anchor="middle">${esc(fmt(b.value))}</text>`;
+    }
+    labelsSvg += label;
+  });
+
+  container.innerHTML = `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-hidden="false">
+    ${gridSvg}
+    <line class="axis-line" x1="${padL}" x2="${width - padR}" y1="${padT + plotH}" y2="${padT + plotH}"/>
+    ${barsSvg}${labelsSvg}
+  </svg>`;
+
+  container.querySelectorAll('.bar').forEach(el => {
+    el.addEventListener('pointerenter', e => showTooltip(e, el.dataset.key, el.dataset.val));
+    el.addEventListener('pointermove', positionTooltip);
+    el.addEventListener('pointerleave', hideTooltip);
+    el.addEventListener('focus', e => showTooltip(e, el.dataset.key, el.dataset.val));
+    el.addEventListener('blur', hideTooltip);
+  });
+}
+
+function wireTableToggle(card, chartEl, tableEl) {
+  const btn = card.querySelector('.table-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const showingTable = !tableEl.classList.contains('hidden');
+    tableEl.classList.toggle('hidden', showingTable);
+    chartEl.classList.toggle('hidden', !showingTable);
+    btn.textContent = showingTable ? 'Table view' : 'Chart view';
+  });
+}
+
+function renderStatusRow(container, successCount, failureCount) {
+  const total = successCount + failureCount;
+  const rate = total ? successCount / total : 0;
+  const goodPct = rate * 100, failPct = 100 - goodPct;
+  container.innerHTML = `
+    <div class="status-chip good"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8l4 4 8-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>${successCount} succeeded (${fmtPct(total ? rate : null)})</div>
+    <div class="status-bar"><div class="seg-good" style="width:${goodPct}%"></div><div class="seg-critical" style="width:${failPct}%"></div></div>
+    <div class="status-chip critical"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${failureCount} failed (${fmtPct(total ? 1 - rate : null)})</div>
+  `;
+}
+
+/* ---- failure breakdown (by error label, from failures.by_label in the harness's
+   lifecycle metrics -- see _failure_categories in benchmark_report.py) ------------- */
+function renderFailureBreakdown(container, categories) {
+  if (!container) return;
+  if (!categories || !categories.length) { container.innerHTML = ''; return; }
+  const rows = categories.map(c => `
+    <tr>
+      <td>${esc(c.label || '(unlabeled)')}</td>
+      <td>${c.count}</td>
+      <td><div class="fail-cat-bar"><div class="track"><div class="fill" style="width:${((c.pct || 0) * 100).toFixed(1)}%"></div></div><span class="pct">${fmtPct(c.pct)}</span></div></td>
+      <td class="fail-msg">${esc(c.sample_message || '')}</td>
+    </tr>`).join('');
+  container.innerHTML = `
+    <h3>Failure breakdown</h3>
+    <table class="data-table">
+      <thead><tr><th>Category</th><th>Count</th><th>% of failures</th><th>Sample message</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+/* ---- stage badge ----------------------------------------------------------- */
+function stageBadge(session) {
+  const tone = (STAGE_STYLE[session.stage] || {}).tone || 'muted';
+  return `<span class="stage-badge tone-${tone}"><span class="dot"></span>${esc(session.stage_label)}</span>`;
+}
+function flagIcons(session) {
+  const flags = [];
+  if (session.has_errors) flags.push('<span class="flag err" title="Errors in this session\'s log">✕</span>');
+  else if (session.has_warnings) flags.push('<span class="flag warn" title="Warnings in this session\'s log">!</span>');
+  if (session.is_stale && !['completed', 'completed_partial', 'completed_failed', 'torn_down'].includes(session.stage)) {
+    flags.push('<span class="flag warn" title="No log activity for a while">⏱</span>');
+  }
+  return flags.length ? `<span class="flag-icons">${flags.join('')}</span>` : '';
+}
+
+/* ---- benchmark-data presence ----------------------------------------------
+   A session "has data" once its `run` phase produced at least one experiment
+   with results (milestones.results). Sessions without data (standup-only,
+   planned, torn down before running) stay visible but de-emphasized, with a
+   neutral chip -- infrastructure activity is legitimate, not a failure. */
+function sessionHasData(s) { return !!(s.milestones && s.milestones.results); }
+function noDataChip(s) {
+  const label = (s.stage === 'stood_up' || s.stage === 'smoketest_passed') ? 'infrastructure'
+    : (s.stage === 'torn_down' || s.stage === 'planned' || s.stage === 'standup_failed' || s.stage === 'smoketest_failed') ? 'no data'
+    : 'no data yet';
+  return `<span class="badge" title="This session produced no benchmark data (no run results)">${label}</span>`;
+}
+
+// Distinct harness · workload pairs actually run in a session (one per `run`
+// phase / experiment). Empty for standup-only sessions -- nothing ran.
+function sessionHarnessWorkloads(s) {
+  return [...new Set((s.experiments || [])
+    .map(e => {
+      const h = e.harness;
+      const w = e.metadata && e.metadata.harness_workload;
+      if (!h && !w) return null;
+      return w ? `${h || 'unknown harness'} · ${w}` : h;
+    })
+    .filter(Boolean))];
+}
+
+/* ---- router ----------------------------------------------------------------- */
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, '');
+  const parts = h.split('/').filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === 'session' && parts[1]) return { view: 'session', id: parts[1] };
+  if (parts[0] === 'spec' && parts[1]) return { view: 'spec', id: parts[1] };
+  if (parts[0] === 'compare' && parts[1]) return { view: 'compare-detail', key: parts[1] };
+  if (parts[0] === 'compare') return { view: 'compare' };
+  return { view: 'specs' };
+}
+window.addEventListener('hashchange', () => { route = parseHash(); render(); });
+
+/* ---- specs list (landing page) ------------------------------------------------ */
+function specKeyOf(session) { return session.scenario_spec || '__unspecified__'; }
+function specLabelOf(key) { return key === '__unspecified__' ? '(unspecified spec)' : key; }
+
+async function renderSpecsList() {
+  const app = document.getElementById('app');
+  if (!META) app.innerHTML = `<h2>Specifications</h2><p class="panel-subtitle">Loading…</p>`;
+  await ensureMeta();
+
+  const knownSpecs = META ? META.specs : [];
+  const sessionsByKey = {};
+  MANIFEST.sessions.forEach(s => {
+    if (s.error) return;
+    const key = specKeyOf(s);
+    (sessionsByKey[key] = sessionsByKey[key] || []).push(s);
+  });
+  const allKeys = new Set([...knownSpecs.map(s => s.id), ...Object.keys(sessionsByKey)]);
+  const rows = [...allKeys].map(key => {
+    const spec = knownSpecs.find(s => s.id === key) || null;
+    const sessions = sessionsByKey[key] || [];
+    const counts = { in_progress: 0, attention: 0, with_data: 0 };
+    sessions.forEach(s => {
+      const g = sessionGroup(s);
+      if (g === 'in_progress' || g === 'attention') counts[g]++;
+      if (sessionHasData(s)) counts.with_data++;
+    });
+    const lastActivity = sessions.reduce((max, s) => (s.last_activity_at && (!max || s.last_activity_at > max)) ? s.last_activity_at : max, null);
+    return { key, spec, sessions, counts, lastActivity };
+  }).sort((a, b) => {
+    if (!!a.spec !== !!b.spec) return a.spec ? -1 : 1;
+    return a.key.localeCompare(b.key);
+  });
+
+  const metaWarning = !META ? `<div class="note"><span aria-hidden="true">⚠</span><div>
+    Could not load <code>meta.json</code> -- spec discovery and starting new sessions are unavailable.
+    This list only reflects specs seen in existing session logs.</div></div>` : '';
+
+  const chips = `<div class="summary-chips">
+    <div class="summary-chip"><b>${rows.filter(r => r.spec).length}</b> specs</div>
+    <div class="summary-chip"><b>${MANIFEST.sessions.length}</b> sessions</div>
+    <div class="summary-chip"><b>${MANIFEST.sessions.filter(s => !s.error && sessionHasData(s)).length}</b> with data</div>
+  </div>`;
+
+  const tableHtml = rows.length ? `<table class="sessions-table"><thead><tr>
+      <th>Spec</th><th>Kind</th><th>Sessions</th><th>With data</th><th>In progress</th><th>Attention</th><th>Last activity</th>
+    </tr></thead><tbody>` + rows.map(r => `
+      <tr data-spec="${esc(r.key)}">
+        <td><div class="session-id">${esc(specLabelOf(r.key))}</div>${!r.spec ? '<div class="session-sub">not found under benchmark/config/specification/</div>' : ''}</td>
+        <td>${esc(r.spec ? r.spec.kind : '—')}</td>
+        <td>${r.sessions.length}</td>
+        <td>${r.counts.with_data}</td>
+        <td>${r.counts.in_progress}</td>
+        <td>${r.counts.attention}</td>
+        <td>${fmtRelative(r.lastActivity)}</td>
+      </tr>`).join('') + `</tbody></table>`
+    : `<div class="empty-state">No specs found under <code>benchmark/config/specification/</code> and no sessions recorded yet.</div>`;
+
+  app.innerHTML = `<h2>Specifications</h2>
+    <p class="panel-subtitle">Every benchmark spec under <code>benchmark/config/specification/</code>, with its historical and in-progress sessions. "With data" counts sessions whose run phase produced benchmark results. Pick one to see its sessions or start a new one.</p>
+    ${metaWarning}${chips}${tableHtml}`;
+
+  app.querySelectorAll('tr[data-spec]').forEach(tr => {
+    tr.addEventListener('click', () => { location.hash = '#/spec/' + encodeURIComponent(tr.dataset.spec); });
+  });
+}
+
+/* ---- spec detail: its sessions (historical + live) + a launch form ------------ */
+let specDetailState = { id: null };
+
+async function renderSpecDetail(specId) {
+  const app = document.getElementById('app');
+  const isSameSpec = specDetailState.id === specId && document.getElementById('spec-sessions-mount');
+  if (!isSameSpec) {
+    stageFilter = 'all';
+    searchQuery = '';
+    app.innerHTML = `<a class="back-link" href="#/">← Back to specs</a><h2>${esc(specLabelOf(specId))}</h2><p class="panel-subtitle">Loading…</p>`;
+    await ensureMeta();
+    specDetailState = { id: specId, spec: META ? META.specs.find(s => s.id === specId) || null : null };
+    paintSpecDetailShell(specId, specDetailState.spec);
+  }
+  refreshSpecSessionsTable(specId);
+}
+
+function paintSpecDetailShell(specId, spec) {
+  const app = document.getElementById('app');
+  const launchCard = spec
+    ? buildLaunchCard(specId)
+    : META
+      ? `<div class="note"><span aria-hidden="true">⚠</span><div>This spec was not found under <code>benchmark/config/specification/</code> (removed or renamed?) -- starting a new session for it is disabled. Existing sessions are still shown above.</div></div>`
+      : `<div class="note"><span aria-hidden="true">⚠</span><div>Could not load <code>meta.json</code> -- starting a new session is unavailable.</div></div>`;
+
+  app.innerHTML = `
+    <a class="back-link" href="#/">← Back to specs</a>
+    <h2>${esc(specLabelOf(specId))} ${spec ? `<span class="badge">${esc(spec.kind)}</span>` : ''}</h2>
+    <p class="panel-subtitle">${spec ? esc(spec.path) : 'Spec file not found.'}</p>
+
+    <h3>Sessions</h3>
+    <div id="spec-sessions-mount"></div>
+
+    <div class="section-break">
+      <h3>Start a session</h3>
+      ${launchCard}
+    </div>
+  `;
+  if (spec) wireSpecDetailLaunchHandlers(specId);
+}
+
+function refreshSpecSessionsTable(specId) {
+  const mount = document.getElementById('spec-sessions-mount');
+  if (!mount) return;
+  const allSessions = MANIFEST.sessions.filter(s => !s.error && specKeyOf(s) === specId);
+  const q = searchQuery.trim().toLowerCase();
+  const rows = allSessions.filter(s => {
+    if (stageFilter !== 'all' && sessionGroup(s) !== stageFilter) return false;
+    if (!q) return true;
+    return [s.id, s.backend, s.model, s.namespace].filter(Boolean).join(' ').toLowerCase().includes(q);
+  });
+  const counts = { in_progress: 0, infrastructure: 0, attention: 0, completed: 0, torn_down: 0 };
+  allSessions.forEach(s => { const g = sessionGroup(s); if (g in counts) counts[g]++; });
+  const withData = allSessions.filter(sessionHasData).length;
+
+  const chips = `<div class="summary-chips">
+    <div class="summary-chip"><b>${allSessions.length}</b> sessions</div>
+    <div class="summary-chip"><b>${withData}</b> with data</div>
+    <div class="summary-chip"><b>${counts.in_progress}</b> in progress</div>
+    <div class="summary-chip"><b>${counts.infrastructure}</b> infrastructure</div>
+    <div class="summary-chip"><b>${counts.attention}</b> need attention</div>
+    <div class="summary-chip"><b>${counts.completed}</b> completed</div>
+  </div>`;
+  const filters = `<div class="stage-filter" id="stage-filter" style="margin-bottom:1rem">
+    ${['all', 'in_progress', 'infrastructure', 'attention', 'completed', 'torn_down'].map(g =>
+      `<button data-stage="${g}" aria-pressed="${g === stageFilter}">${g.replace('_', ' ')}</button>`
+    ).join('')}
+    <input type="text" class="search-input" id="session-search" placeholder="Search cluster-config, model, namespace…" value="${esc(searchQuery)}">
+  </div>`;
+
+  let tableHtml;
+  if (!allSessions.length) {
+    tableHtml = `<div class="empty-state">No sessions yet for this spec.<br><span>Use "Start a session" below to launch one.</span></div>`;
+  } else if (!rows.length) {
+    tableHtml = `<div class="empty-state">No sessions match the current filter/search.</div>`;
+  } else {
+    tableHtml = `<table class="sessions-table"><thead><tr>
+      <th>Session</th><th>Stage</th><th>Cluster-config</th><th>Model</th><th>Namespace</th><th>Harness / workload</th><th>Experiments</th><th></th>
+    </tr></thead><tbody>` + rows.map(s => {
+      const expCount = s.experiments.length;
+      const expOk = s.experiments.filter(e => e.status === 'success').length;
+      const hw = sessionHarnessWorkloads(s);
+      const muted = !sessionHasData(s);
+      return `<tr data-session="${esc(s.id)}"${muted ? ' class="session-row-muted"' : ''}>
+        <td><div class="session-id">${esc(s.id)}${muted ? ' ' + noDataChip(s) : ''}</div><div class="session-sub">started ${fmtRelative(s.started_at)}${s.is_latest ? ' · <span class="badge latest">latest</span>' : ''}${s.is_dry_run ? ' · <span class="badge dry-run">dry-run</span>' : ''}</div></td>
+        <td>${stageBadge(s)}</td>
+        <td>${esc(s.backend || '—')}</td>
+        <td>${esc(s.model || '—')}</td>
+        <td>${esc(s.namespace || '—')}</td>
+        <td>${hw.length ? hw.map(p => `<code>${esc(p)}</code>`).join('<br>') : '—'}</td>
+        <td>${expCount ? `${expOk}/${expCount} ok` : '—'}</td>
+        <td><div class="row-actions">${flagIcons(s)}<button class="icon-btn delete-session-icon" data-session="${esc(s.id)}" type="button" title="Delete session">${TRASH_ICON_SVG}</button></div></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+  }
+
+  mount.innerHTML = `${chips}${filters}${tableHtml}`;
+
+  mount.querySelectorAll('#stage-filter button').forEach(btn => {
+    btn.addEventListener('click', () => { stageFilter = btn.dataset.stage; refreshSpecSessionsTable(specId); });
+  });
+  const search = document.getElementById('session-search');
+  if (search) search.addEventListener('input', () => { searchQuery = search.value; refreshSpecSessionsTable(specId); });
+  mount.querySelectorAll('tr[data-session]').forEach(tr => {
+    tr.addEventListener('click', () => { location.hash = '#/session/' + encodeURIComponent(tr.dataset.session); });
+  });
+  mount.querySelectorAll('.delete-session-icon').forEach(btn => {
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
+      const s = MANIFEST.sessions.find(x => x.id === btn.dataset.session);
+      if (s) deleteSession(s);
+    });
+  });
+}
+
+/* ---- experiment card (shared by run detail) --------------------------------- */
+function buildExperimentCard(container, exp) {
+  const card = document.createElement('div');
+  card.className = 'experiment-card';
+  const statusTone = { success: 'good', failed: 'critical', pending: 'warning' }[exp.status] || 'muted';
+  const meta = exp.metadata || {};
+  card.innerHTML = `
+    <div class="exp-head">
+      <span class="exp-id">${esc(exp.id)}</span>
+      <span class="stage-badge tone-${statusTone}"><span class="dot"></span>${esc(exp.status)}</span>
+      <span class="exp-sub">${esc(exp.harness || 'unknown harness')}${meta.harness_workload ? ' · ' + esc(meta.harness_workload) : ''}${exp.harness_delta_seconds ? ' · ' + fmtDuration(exp.harness_delta_seconds) : ''}</span>
+    </div>
+    <div class="exp-body"></div>
+  `;
+  container.appendChild(card);
+  const body = card.querySelector('.exp-body');
+
+  if (!exp.metadata) {
+    body.innerHTML = `<div class="note"><span aria-hidden="true">⚠</span><div>No <code>run_metadata.yaml</code> yet for this experiment -- the harness pod may still be running or may have crashed before writing it.</div></div>`;
+    return;
+  }
+
+  const m = exp.metrics;
+  if (!m) {
+    body.innerHTML = `<div class="note"><span aria-hidden="true">⚠</span><div>${esc(exp.metrics_unsupported_reason || 'No metrics available for this experiment.')}</div></div>`;
+  } else {
+    const successCount = m.success_count || 0, failureCount = m.failure_count || 0;
+    body.innerHTML = `
+      <div class="tiles">
+        <div class="tile"><div class="label">TTFT P50</div><div class="value">${fmtMs(m.ttft_ms && m.ttft_ms.p50)}</div></div>
+        <div class="tile"><div class="label">TTFT P95</div><div class="value">${fmtMs(m.ttft_ms && m.ttft_ms.p95)}</div></div>
+        <div class="tile"><div class="label">ITL P50</div><div class="value">${fmtMs(m.itl_ms && m.itl_ms.p50)}</div></div>
+        <div class="tile"><div class="label">ITL P95</div><div class="value">${fmtMs(m.itl_ms && m.itl_ms.p95)}</div></div>
+        <div class="tile"><div class="label">Success rate</div><div class="value">${fmtPct(successRateOf(m))}</div></div>
+        <div class="tile highlight goodput-tile"><div class="label">Goodput</div><div class="value goodput-value"></div><div class="sub">of ${fmtReq(throughputOf(exp))} raw</div></div>
+      </div>
+      <h3>Success / failure</h3>
+      <div class="status-row status-mount"></div>
+      <div class="fail-breakdown-mount"></div>
+      <h3>Latency percentiles</h3>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><span class="title">Time to first token</span><button class="table-toggle" type="button">Table view</button></div>
+          <div class="ttft-chart-mount"></div>
+          <table class="data-table hidden ttft-table"></table>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="title">Inter-token latency</span><button class="table-toggle" type="button">Table view</button></div>
+          <div class="itl-chart-mount"></div>
+          <table class="data-table hidden itl-table"></table>
+        </div>
+      </div>
+    `;
+    renderStatusRow(body.querySelector('.status-mount'), successCount, failureCount);
+    renderFailureBreakdown(body.querySelector('.fail-breakdown-mount'), m.failure_categories);
+    const color = 'var(--series-1)';
+    const ttftBars = PCT_ORDER.map(k => ({ label: PCT_LABELS[k], value: m.ttft_ms && m.ttft_ms[k], color }));
+    const itlBars = PCT_ORDER.map(k => ({ label: PCT_LABELS[k], value: m.itl_ms && m.itl_ms[k], color }));
+    renderBarChart(body.querySelector('.ttft-chart-mount'), { bars: ttftBars, fmt: fmtMs, height: 170 });
+    renderBarChart(body.querySelector('.itl-chart-mount'), { bars: itlBars, fmt: fmtMs, height: 170 });
+    const ttftTable = body.querySelector('.ttft-table');
+    ttftTable.innerHTML = '<thead><tr>' + PCT_ORDER.map(k => `<th>${PCT_LABELS[k]}</th>`).join('') + '</tr></thead><tbody><tr>' + PCT_ORDER.map(k => `<td>${fmtMs(m.ttft_ms && m.ttft_ms[k])}</td>`).join('') + '</tr></tbody>';
+    const itlTable = body.querySelector('.itl-table');
+    itlTable.innerHTML = '<thead><tr>' + PCT_ORDER.map(k => `<th>${PCT_LABELS[k]}</th>`).join('') + '</tr></thead><tbody><tr>' + PCT_ORDER.map(k => `<td>${fmtMs(m.itl_ms && m.itl_ms[k])}</td>`).join('') + '</tr></tbody>';
+    body.querySelectorAll('.card').forEach((c, i) => wireTableToggle(c, c.querySelector(i === 0 ? '.ttft-chart-mount' : '.itl-chart-mount'), c.querySelector(i === 0 ? '.ttft-table' : '.itl-table')));
+
+    const repaintGoodput = () => {
+      const [ttftSlo, itlSlo] = sloInputs();
+      body.querySelector('.goodput-value').textContent = fmtReq(goodputOf(exp, ttftSlo, itlSlo));
+    };
+    repaintGoodput();
+    experimentRepaintFns.push(repaintGoodput);
+  }
+
+  const grafanaDiv = document.createElement('div');
+  const liveUrl = exp.grafana_live_url || (exp.grafana && exp.grafana.live_dashboard_url);
+  const liveHtml = liveUrl
+    ? `<p><strong>Live dashboard</strong> (time-boxed to this run &amp; its namespace, so it shows only this run's data): <a href="${esc(liveUrl)}" target="_blank">open in Grafana</a><br>
+       <span style="color:var(--text-muted)">Needs Grafana at localhost:3000 and Prometheus still holding the data.</span></p>`
+    : `<p style="color:var(--text-muted)">No live dashboard link yet — the run window isn't recorded until this experiment writes <code>run_metadata.yaml</code>.</p>`;
+  const snapHtml = exp.grafana
+    ? `<p><strong>Snapshot</strong> (frozen copy, survives Prometheus retention): <a href="${esc(exp.grafana.snapshot_url)}" target="_blank">${esc(exp.grafana.snapshot_url)}</a></p>`
+    : `<div class="action-row"><button class="btn snap-btn" type="button">Create Grafana snapshot</button><span class="launch-status snap-status"></span></div>
+       <p class="hint" style="margin:.4rem 0 0">Freezes this run's panels into a permanent snapshot. Needs Grafana at localhost:3000 (run <code>configure</code> once) with Prometheus still holding the data.</p>`;
+  grafanaDiv.innerHTML = `<h3>Grafana</h3><div class="links">${liveHtml}${snapHtml}</div>`;
+  body.appendChild(grafanaDiv);
+  const snapBtn = grafanaDiv.querySelector('.snap-btn');
+  if (snapBtn) snapBtn.addEventListener('click', () => createSnapshot(exp, grafanaDiv.querySelector('.snap-status'), snapBtn));
+
+  if (exp.raw_files.length) {
+    const filesDiv = document.createElement('div');
+    filesDiv.innerHTML = `<h3>Raw files</h3><ul class="raw-files-list">${
+      exp.raw_files.map(f => `<li><a class="link" href="${resultsUrl(f.path)}" target="_blank">${esc(f.name)}</a><span class="size">${fmtBytes(f.size)}</span></li>`).join('')
+    }</ul>`;
+    body.appendChild(filesDiv);
+  }
+}
+
+/* ---- session detail ----------------------------------------------------------- */
+let experimentRepaintFns = [];
+
+function buildNextStepSection(session) {
+  const info = NEXT_STEP[session.stage];
+  if (!info) return '';
+  const canLaunch = session.scenario_spec && session.backend && session.namespace && META && META.specs.some(s => s.id === session.scenario_spec);
+  if (!canLaunch) {
+    return `<div class="note" style="border-left-color:var(--series-1)"><span aria-hidden="true">➡</span><div>
+      <strong>Next step:</strong> ${esc(info.message)}
+      Quick actions aren't available here (missing spec/cluster-config/namespace, meta.json didn't load, or this spec's file is gone) -- use the spec page instead.</div></div>`;
+  }
+  const runForm = info.actions.includes('run') ? `
+    <div class="field-row" style="margin-top:.6rem">
+      <div class="field"><label for="ns-harness">Harness</label><select id="ns-harness">${harnessSelectHtml()}</select></div>
+      <div class="field"><label for="ns-workload">Workload</label><select id="ns-workload"></select></div>
+    </div>
+    <div class="action-row"><button class="btn primary" id="ns-run-btn" type="button">Run workload</button><span class="launch-status" id="ns-run-status"></span></div>
+  ` : '';
+  const standupForm = info.actions.includes('standup') ? `
+    <div class="action-row" style="margin-top:.6rem"><button class="btn primary" id="ns-standup-btn" type="button">Retry standup</button><span class="launch-status" id="ns-standup-status"></span></div>
+  ` : '';
+  const teardownForm = info.actions.includes('teardown') ? `
+    <div class="action-row" style="margin-top:.5rem"><button class="btn danger" id="ns-teardown-btn" type="button">Teardown</button><span class="launch-status" id="ns-teardown-status"></span></div>
+  ` : '';
+  return `<div class="note" style="border-left-color:var(--series-1)"><span aria-hidden="true">➡</span><div style="width:100%">
+    <strong>Next step:</strong> ${esc(info.message)}
+    ${runForm}${standupForm}${teardownForm}
+  </div></div>`;
+}
+
+function wireNextStepSection(session) {
+  const info = NEXT_STEP[session.stage];
+  if (!info) return;
+  const canLaunch = session.scenario_spec && session.backend && session.namespace && META && META.specs.some(s => s.id === session.scenario_spec);
+  if (!canLaunch) return;
+
+  const afterHash = '#/spec/' + encodeURIComponent(session.scenario_spec);
+  function target(extra) {
+    return { spec: session.scenario_spec, clusterConfig: session.backend, namespace: session.namespace, dryRun: false, ...extra };
+  }
+  if (info.actions.includes('run')) {
+    wireHarnessWorkloadSelect('ns-harness', 'ns-workload');
+    document.getElementById('ns-run-btn').addEventListener('click', () => launchAction('run', target({
+      harness: document.getElementById('ns-harness').value, workload: document.getElementById('ns-workload').value,
+    }), { prefix: 'ns', afterHash }));
+  }
+  if (info.actions.includes('standup')) {
+    document.getElementById('ns-standup-btn').addEventListener('click', () => launchAction('standup', target(), { prefix: 'ns', afterHash }));
+  }
+  if (info.actions.includes('teardown')) {
+    document.getElementById('ns-teardown-btn').addEventListener('click', () => launchAction('teardown', target(), { prefix: 'ns', afterHash }));
+  }
+}
+
+let sessionDetailState = { id: null, stage: null };
+
+async function renderSessionDetail(id) {
+  const app = document.getElementById('app');
+  const session = MANIFEST.sessions.find(s => s.id === id);
+  if (!session) {
+    sessionDetailState = { id: null, stage: null };
+    app.innerHTML = `<a class="back-link" href="#/">← Back to specs</a><div class="empty-state">Session <code>${esc(id)}</code> not found. It may have been removed, or the dashboard hasn't refreshed yet.</div>`;
+    return;
+  }
+
+  // Only rebuild the shell (and its Next-step form) when the session or its
+  // stage actually changed -- an unrelated 8s poll shouldn't wipe out a
+  // harness/workload selection someone's mid-picking in that form.
+  const isSameSessionAndStage = sessionDetailState.id === id && sessionDetailState.stage === session.stage && document.getElementById('log-stdout');
+  if (isSameSessionAndStage) {
+    refreshSessionDetailLiveParts(session);
+    return;
+  }
+
+  if (NEXT_STEP[session.stage]) await ensureMeta();
+  sessionDetailState = { id, stage: session.stage };
+  paintSessionDetailShell(session);
+}
+
+function paintSessionDetailShell(session) {
+  const app = document.getElementById('app');
+  experimentRepaintFns = [];
+
+  const activeStep = (STAGE_STYLE[session.stage] || {}).step;
+  const isFailureStage = STAGE_IS_FAILURE.has(session.stage);
+  const timeline = TIMELINE_STEPS.map(([key, label], i) => {
+    const done = session.milestones[key];
+    const isActive = key === activeStep && !done;
+    let cls = done ? 'done' : (isActive ? (isFailureStage ? 'failed' : 'current') : '');
+    const icon = done ? '✓' : (isActive && isFailureStage ? '✕' : (i + 1));
+    const sep = i < TIMELINE_STEPS.length - 1 ? '<span class="sep"></span>' : '';
+    return `<div class="step ${cls}"><span class="icon">${icon}</span>${esc(label)}</div>${sep}`;
+  }).join('');
+
+  const stacksHtml = session.stacks.length ? session.stacks.map(s => `
+    <div class="kv"><div class="k">Stack</div><div class="v">${esc(s.name)} — ${esc(s.model_name || '?')} in <code>${esc(s.namespace || '?')}</code>
+      · <a class="link" href="${resultsUrl(session.id + '/plan/' + s.name + '/config.yaml')}" target="_blank">rendered config</a></div></div>
+  `).join('') : '<div class="kv"><div class="k">Stacks</div><div class="v">—</div></div>';
+
+  const siblings = MANIFEST.sessions.filter(s => s.id !== session.id && s.model === session.model && s.backend === session.backend
+    && s.experiments.some(e => e.metrics));
+  const compareLink = (session.model && session.backend && siblings.length)
+    ? `<p><a class="link" href="#/compare/${encodeURIComponent(session.model + '|' + session.backend)}">Compare with ${siblings.length} other session(s) on <code>${esc(session.model)}</code> / <code>${esc(session.backend)}</code> →</a></p>`
+    : '';
+
+  const backHash = session.scenario_spec ? '#/spec/' + encodeURIComponent(session.scenario_spec) : '#/';
+  const backLabel = session.scenario_spec ? `← Back to ${esc(session.scenario_spec)}` : '← Back to specs';
+
+  app.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <a class="back-link" href="${backHash}" style="margin-bottom:0">${backLabel}</a>
+      <button class="btn" id="delete-session-btn" type="button" style="color:var(--status-critical); border-color:var(--status-critical)">Delete session</button>
+    </div>
+    <h2>${esc(session.id)} ${session.is_latest ? '<span class="badge latest">latest</span>' : ''} ${session.is_dry_run ? '<span class="badge dry-run">dry-run</span>' : ''} ${!sessionHasData(session) ? noDataChip(session) : ''}</h2>
+    <p class="panel-subtitle">${stageBadge(session)} · last activity ${fmtRelative(session.last_activity_at)}</p>
+    <div id="session-observability" style="margin:.4rem 0 1rem"></div>
+
+    <div class="timeline">${timeline}</div>
+
+    ${buildNextStepSection(session)}
+
+    <div class="kv-grid">
+      <div class="kv"><div class="k">Scenario</div><div class="v">${esc(session.scenario_spec || '—')}</div></div>
+      <div class="kv"><div class="k">Cluster-config</div><div class="v">${esc(session.backend || '—')}</div></div>
+      <div class="kv"><div class="k">Harness / workload</div><div class="v">${(() => { const hw = sessionHarnessWorkloads(session); return hw.length ? hw.map(p => `<code>${esc(p)}</code>`).join('<br>') : '<span style="color:var(--text-muted)">none run</span>'; })()}</div></div>
+      <div class="kv"><div class="k">Started</div><div class="v">${esc(session.started_at || '—')}</div></div>
+      <div class="kv"><div class="k">Last activity</div><div class="v">${esc(session.last_activity_at || '—')} (${fmtRelative(session.last_activity_at)})</div></div>
+      ${stacksHtml}
+    </div>
+    ${compareLink}
+
+    <h3>Log tail</h3>
+    <div class="log-tabs">
+      <button data-log="stdout" aria-pressed="true">stdout</button>
+      <button data-log="stderr" aria-pressed="false">stderr${session.stderr_tail.length ? ` (${session.stderr_tail.length})` : ''}</button>
+      <span class="raw-link"><a class="link" href="${resultsUrl(session.id + '/logs/llmdbenchmark-stdout.log')}" target="_blank">view full stdout</a> ·
+      <a class="link" href="${resultsUrl(session.id + '/logs/llmdbenchmark-stderr.log')}" target="_blank">stderr</a></span>
+    </div>
+    <pre class="log-view" id="log-stdout">${esc(session.log_tail.join('\n') || '(empty)')}</pre>
+    <pre class="log-view hidden" id="log-stderr">${esc(session.stderr_tail.join('\n') || '(empty)')}</pre>
+
+    <h3>Experiments</h3>
+    <div id="experiments-mount"></div>
+  `;
+
+  document.getElementById('delete-session-btn').addEventListener('click', () => deleteSession(session));
+  wireNextStepSection(session);
+
+  app.querySelectorAll('.log-tabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      app.querySelectorAll('.log-tabs button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+      document.getElementById('log-stdout').classList.toggle('hidden', btn.dataset.log !== 'stdout');
+      document.getElementById('log-stderr').classList.toggle('hidden', btn.dataset.log !== 'stderr');
+    });
+  });
+
+  paintExperimentsMount(session);
+  renderSessionObservability(session);
+
+  document.getElementById('slo-ttft').oninput = () => experimentRepaintFns.forEach(fn => fn());
+  document.getElementById('slo-itl').oninput = () => experimentRepaintFns.forEach(fn => fn());
+}
+
+// Session-level Grafana/Prometheus links, scoped to this session's namespace and its whole
+// lifetime so far (see grafana_live_url in _scan_session) -- unlike the per-experiment
+// links, these work from the moment the session's first log line lands, before any
+// run_metadata.yaml exists. The Prometheus link is built client-side from the
+// system-status strip's own Prometheus URL (there's no server-rendered one), so it only
+// appears once that's loaded; renderSystemStatus() re-calls this to backfill it. Caution:
+// vLLM/Prometheus metrics carry no per-session label, only `namespace` -- if this namespace
+// is reused by another session, these links can't distinguish which one's data is which
+// beyond the time window itself.
+function prometheusGraphUrlFor(namespace) {
+  const prom = SYS_STATUS && SYS_STATUS.prometheus;
+  if (!prom || !prom.url || !namespace) return null;
+  const expr = `vllm:kv_cache_usage_perc{namespace="${namespace}"}`;
+  if (prom.requires_auth) {
+    // A bearer-token-protected Prometheus (e.g. OpenShift's thanos-querier) has no browsable
+    // UI a plain link click can reach -- there's no Authorization header on <a href>, and
+    // thanos-querier's Route is /api-only anyway (see build_system_status). Route through
+    // Grafana Explore instead, which already holds the token via the datasource.
+    const grafanaUrl = SYS_STATUS.grafana && SYS_STATUS.grafana.url;
+    if (!prom.datasource_uid || !grafanaUrl) return null;
+    const paneState = { datasource: prom.datasource_uid, queries: [{ refId: 'A', expr }], range: { from: 'now-1h', to: 'now' } };
+    return {
+      url: `${grafanaUrl.replace(/\/$/, '')}/explore?orgId=1&left=${encodeURIComponent(JSON.stringify(paneState))}`,
+      label: 'Prometheus (Explore) ↗',
+    };
+  }
+  return {
+    url: `${prom.url.replace(/\/$/, '')}/query?g0.expr=${encodeURIComponent(expr)}&g0.tab=graph`,
+    label: 'Prometheus ↗',
+  };
+}
+
+function renderSessionObservability(session) {
+  const mount = document.getElementById('session-observability');
+  if (!mount) return;
+  const caution = "Scoped to this session's namespace + time window -- the underlying vLLM/Prometheus metrics carry no per-session label, so if this namespace is reused by another session the ranges could overlap.";
+  const links = [];
+  if (session.grafana_live_url) links.push(`<a class="link" href="${esc(session.grafana_live_url)}" target="_blank" title="${esc(caution)}">Grafana ↗</a>`);
+  const promLink = prometheusGraphUrlFor(session.namespace);
+  if (promLink) links.push(`<a class="link" href="${esc(promLink.url)}" target="_blank" title="${esc(caution)}">${promLink.label}</a>`);
+  mount.innerHTML = links.length
+    ? `<span class="hint">Observability:</span> ${links.join(' · ')}`
+    : `<span class="hint">No Grafana/Prometheus link yet -- waiting on log activity to establish this session's time window.</span>`;
+}
+
+const EXPERIMENT_EMPTY_HINTS = {
+  planned: "This session hasn't been stood up yet.",
+  standing_up: 'Standup is still in progress.',
+  standup_failed: 'Standup failed before the harness could run -- check the log tail above.',
+  stood_up: "Standup finished; the `run` phase hasn't started yet.",
+  smoketest_passed: "Smoketest passed; the `run` phase hasn't started yet.",
+  smoketest_failed: 'Smoketest failed -- check the log tail above before running.',
+  stalled: "The harness pod was deployed but never wrote results -- it may have crashed or is still starting. Check the log tail above.",
+  run_failed: 'The run failed before producing results -- check the log tail above.',
+};
+
+function paintExperimentsMount(session) {
+  const expMount = document.getElementById('experiments-mount');
+  if (!expMount) return;
+  experimentRepaintFns = [];
+  if (!session.experiments.length) {
+    expMount.innerHTML = `<div class="empty-state">No experiments recorded for this session yet.<br><span>${esc(EXPERIMENT_EMPTY_HINTS[session.stage] || '')}</span></div>`;
+  } else {
+    expMount.innerHTML = '';
+    session.experiments.forEach(exp => buildExperimentCard(expMount, exp));
+  }
+}
+
+// Called on same-session-same-stage polls: patches the log tail and experiments
+// list in place, leaving the Next-step form (and its harness/workload
+// selection) and log-tab toggle untouched.
+function refreshSessionDetailLiveParts(session) {
+  const stdoutEl = document.getElementById('log-stdout');
+  const stderrEl = document.getElementById('log-stderr');
+  if (stdoutEl) stdoutEl.textContent = session.log_tail.join('\n') || '(empty)';
+  if (stderrEl) stderrEl.textContent = session.stderr_tail.join('\n') || '(empty)';
+  paintExperimentsMount(session);
+  renderSessionObservability(session);
+}
+
+/* ---- compare: list groups ------------------------------------------------------
+   Only sessions whose run phase produced metric-bearing experiments are
+   comparable, so this is inherently a "sessions with data" view. */
+function compareGroups() {
+  const groups = {};
+  MANIFEST.sessions.forEach(s => {
+    if (s.error || !s.model || !s.backend) return;
+    const withMetrics = s.experiments.filter(e => e.metrics);
+    if (!withMetrics.length) return;
+    const key = s.model + '|' + s.backend;
+    (groups[key] = groups[key] || []).push(s);
+  });
+  return Object.entries(groups).filter(([, sessions]) => sessions.length >= 2);
+}
+
+function renderCompareList() {
+  const app = document.getElementById('app');
+  const groups = compareGroups();
+  let body;
+  if (!groups.length) {
+    body = `<div class="empty-state">No comparable sessions yet.<br><span>Once two or more sessions with benchmark data share the same model + backend (e.g. a <code>baseline</code> vs a <code>staging/&lt;guide&gt;/kv-early</code> scaling strategy), they'll show up here.</span></div>`;
+  } else {
+    body = `<div class="compare-groups">` + groups.map(([key, sessions]) => {
+      const [model, backend] = key.split('|');
+      const scenarios = [...new Set(sessions.map(s => s.scenario_spec).filter(Boolean))];
+      return `<div class="compare-group-card" data-key="${esc(key)}">
+        <div><div class="title">${esc(model)} <span style="color:var(--text-muted);font-weight:400">on</span> ${esc(backend)}</div>
+        <div class="sub">${sessions.length} sessions · scenarios: ${esc(scenarios.join(', ') || '—')}</div></div>
+        <div class="badge">compare →</div>
+      </div>`;
+    }).join('') + `</div>`;
+  }
+  app.innerHTML = `<h2>Compare</h2><p class="panel-subtitle">Groups of sessions that share a model + backend, so their scenario/scaling-strategy choice is the only variable.</p>${body}`;
+  app.querySelectorAll('.compare-group-card').forEach(el => {
+    el.addEventListener('click', () => { location.hash = '#/compare/' + encodeURIComponent(el.dataset.key); });
+  });
+}
+
+/* ---- compare: detail (small multiples + table, à la the original mockup) ------ */
+function renderCompareDetail(key) {
+  const app = document.getElementById('app');
+  const [model, backend] = key.split('|');
+  const sessions = (compareGroups().find(([k]) => k === key) || [null, []])[1];
+  if (!sessions.length) {
+    app.innerHTML = `<a class="back-link" href="#/compare">← Back to compare</a><div class="empty-state">No comparable sessions for <code>${esc(key)}</code>.</div>`;
+    return;
+  }
+
+  // One representative (most recent, metrics-bearing) experiment per session == one "strategy".
+  const strategies = sessions.map((sess, i) => {
+    const exp = [...sess.experiments].reverse().find(e => e.metrics);
+    return { session: sess, exp, name: sess.scenario_spec || sess.id, color: PALETTE[i % PALETTE.length] };
+  });
+
+  app.innerHTML = `
+    <a class="back-link" href="#/compare">← Back to compare</a>
+    <h2>${esc(model)} on ${esc(backend)}</h2>
+    <p class="panel-subtitle">Comparing ${strategies.length} session(s) that share this model + backend.</p>
+    <div class="grid-4" id="compare-charts"></div>
+    <div class="legend" id="compare-legend">${strategies.map(s => `<span class="item"><span class="swatch" style="background:${s.color}"></span>${esc(s.name)} <span style="color:var(--text-muted)">(${esc(s.session.id)})</span></span>`).join('')}</div>
+    <h3>All metrics</h3>
+    <div style="overflow-x:auto"><table class="data-table" id="compare-table"></table></div>
+  `;
+
+  const chartsDef = [
+    { title: 'TTFT — P95', unit: 'ms', fmt: fmtMs, get: s => s.exp && s.exp.metrics.ttft_ms && s.exp.metrics.ttft_ms.p95 },
+    { title: 'ITL — P95', unit: 'ms', fmt: fmtMs, get: s => s.exp && s.exp.metrics.itl_ms && s.exp.metrics.itl_ms.p95 },
+    { title: 'Raw throughput', unit: 'req/s', fmt: fmtReq, get: s => s.exp && throughputOf(s.exp) },
+    { title: 'Goodput', unit: 'req/s', fmt: fmtReq, get: s => s.exp && goodputOf(s.exp, ...sloInputs()) },
+  ];
+  const chartsEl = document.getElementById('compare-charts');
+  const mounts = chartsDef.map(c => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<div class="card-head"><span class="title">${esc(c.title)}</span><span class="unit">${esc(c.unit)}</span></div><div class="chart-mount"></div>`;
+    chartsEl.appendChild(card);
+    return { cfg: c, mount: card.querySelector('.chart-mount') };
+  });
+
+  function repaint() {
+    mounts.forEach(({ cfg, mount }) => {
+      const bars = strategies.map(s => ({ label: s.name, value: cfg.get(s), color: s.color }));
+      renderBarChart(mount, { bars, fmt: cfg.fmt, height: 150 });
+    });
+    const rows = [
+      { label: 'TTFT — P50', get: s => s.exp && fmtMs(s.exp.metrics.ttft_ms && s.exp.metrics.ttft_ms.p50) },
+      { label: 'TTFT — P95', get: s => s.exp && fmtMs(s.exp.metrics.ttft_ms && s.exp.metrics.ttft_ms.p95) },
+      { label: 'ITL — P50', get: s => s.exp && fmtMs(s.exp.metrics.itl_ms && s.exp.metrics.itl_ms.p50) },
+      { label: 'ITL — P95', get: s => s.exp && fmtMs(s.exp.metrics.itl_ms && s.exp.metrics.itl_ms.p95) },
+      { label: 'Success rate', get: s => s.exp && fmtPct(successRateOf(s.exp.metrics)) },
+      { label: 'Raw throughput', get: s => s.exp && fmtReq(throughputOf(s.exp)), raw: s => s.exp && throughputOf(s.exp) },
+      { label: 'Goodput (SLO-adjusted)', get: s => s.exp && fmtReq(goodputOf(s.exp, ...sloInputs())), raw: s => s.exp && goodputOf(s.exp, ...sloInputs()) },
+    ];
+    const table = document.getElementById('compare-table');
+    let thead = '<thead><tr><th>Metric</th>' + strategies.map(s => `<th>${esc(s.name)}<br><span style="font-weight:400;text-transform:none">${esc(s.session.id)}</span></th>`).join('') + '</tr></thead>';
+    let tbody = '<tbody>' + rows.map(m => {
+      let bestIdx = -1;
+      if (m.raw) { const vals = strategies.map(m.raw); bestIdx = vals.indexOf(Math.max(...vals.filter(v => v != null))); }
+      const cells = strategies.map((s, i) => `<td class="${i === bestIdx ? 'best' : ''} ${m.get(s) == null ? 'na' : ''}">${m.get(s) ?? 'N/A'}</td>`).join('');
+      return `<tr><td>${esc(m.label)}</td>${cells}</tr>`;
+    }).join('') + '</tbody>';
+    table.innerHTML = thead + tbody;
+  }
+  repaint();
+  document.getElementById('slo-ttft').oninput = repaint;
+  document.getElementById('slo-itl').oninput = repaint;
+}
+
+/* ---- top-level render / refresh ------------------------------------------------ */
+function render() {
+  document.querySelectorAll('#top-nav a').forEach(a => {
+    const isCompare = route.view === 'compare' || route.view === 'compare-detail';
+    const isSpecs = route.view === 'specs' || route.view === 'spec';
+    a.classList.toggle('active', (a.dataset.view === 'specs' && isSpecs) || (a.dataset.view === 'compare' && isCompare));
+  });
+  if (route.view === 'session') renderSessionDetail(route.id);
+  else if (route.view === 'spec') renderSpecDetail(route.id);
+  else if (route.view === 'compare') renderCompareList();
+  else if (route.view === 'compare-detail') renderCompareDetail(route.key);
+  else renderSpecsList();
+}
+
+/* ---- launching phases: standup / run / teardown, embedded in a spec's page ---- */
+let META = null;
+
+async function ensureMeta() {
+  if (META) return META;
+  try {
+    const res = await fetch('meta.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    META = await res.json();
+  } catch (e) {
+    META = null;
+  }
+  return META;
+}
+
+function harnessSelectHtml() {
+  return META.harnesses.map(h =>
+    `<option value="${esc(h.id)}" ${h.workloads.length === 0 ? 'disabled' : ''}>${esc(h.id)}${h.workloads.length === 0 ? ' (no workloads found)' : ''}</option>`
+  ).join('');
+}
+
+function wireHarnessWorkloadSelect(harnessSelectId, workloadSelectId) {
+  function populate() {
+    const h = META.harnesses.find(x => x.id === document.getElementById(harnessSelectId).value);
+    document.getElementById(workloadSelectId).innerHTML =
+      (h ? h.workloads : []).map(w => `<option value="${esc(w)}">${esc(w)}</option>`).join('') || '<option value="">(none found)</option>';
+  }
+  document.getElementById(harnessSelectId).addEventListener('change', populate);
+  populate();
+}
+
+function buildLaunchCard(specId) {
+  const ccHtml = META.cluster_configs.map(c => `<option value="${esc(c.id)}">${esc(c.id)}</option>`).join('');
+  const harnessHtml = harnessSelectHtml();
+
+  return `
+    <div class="kube-context-banner">
+      <span aria-hidden="true">☸</span> Current cluster context: <code>${esc(META.kube_context || 'unknown — is kubectl/oc on PATH?')}</code>
+    </div>
+    ${!META.llmdbenchmark_bin_found ? `<div class="note"><span aria-hidden="true">⚠</span><div>
+      <code>llmdbenchmark</code> CLI not found under <code>${esc(META.llmd_benchmark_dir)}</code>.
+      Launching will fail until the sibling clone is set up — see <code>benchmark/README.md</code>.</div></div>` : ''}
+
+    <div class="card form-card">
+      <div class="field-row">
+        <div class="field"><label for="nr-cluster-config">Cluster-config</label><select id="nr-cluster-config">${ccHtml}</select></div>
+        <div class="field"><label for="nr-namespace">Namespace</label><input type="text" id="nr-namespace" placeholder="required, e.g. my-bench-ns"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="nr-harness">Harness</label><select id="nr-harness">${harnessHtml}</select></div>
+        <div class="field"><label for="nr-workload">Workload</label><select id="nr-workload"></select></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.82rem;color:var(--text-secondary)">
+        <input type="checkbox" id="nr-dry-run"> Dry run (render locally, no cluster writes — ignored by teardown)
+      </label>
+    </div>
+
+    <div class="card form-card" style="border-color:var(--series-1)">
+      <h3 style="margin-top:0">Run all phases</h3>
+      <p class="hint" style="margin:0 0 .75rem">Standup → smoketest → run, using the cluster-config/namespace/harness/workload above. Stops automatically if standup or smoketest fails.</p>
+      <div class="action-row"><button class="btn primary" id="nr-all-btn" type="button">Run all phases</button><span class="launch-status" id="nr-all-status"></span></div>
+    </div>
+
+    <h3>Or run phases individually</h3>
+    <div class="grid-2">
+      <div class="card form-card">
+        <h3 style="margin-top:0">Standup</h3>
+        <p class="hint" style="margin:0 0 .75rem">Creates the namespace and deploys the model-serving stack for this spec + cluster-config.</p>
+        <div class="action-row"><button class="btn primary" id="nr-standup-btn" type="button">Standup</button><span class="launch-status" id="nr-standup-status"></span></div>
+      </div>
+      <div class="card form-card">
+        <h3 style="margin-top:0">Teardown</h3>
+        <p class="hint" style="margin:0 0 .75rem">Removes cluster resources for this spec + cluster-config + namespace. Local session directories stay — use the trash icon below for those.</p>
+        <div class="action-row"><button class="btn danger" id="nr-teardown-btn" type="button">Teardown</button><span class="launch-status" id="nr-teardown-status"></span></div>
+      </div>
+    </div>
+    <div class="card form-card">
+      <h3 style="margin-top:0">Run workload</h3>
+      <p class="hint" style="margin:0 0 .75rem">Deploys a harness pod that runs the workload above against the already-standing namespace.</p>
+      <div class="action-row"><button class="btn primary" id="nr-run-btn" type="button">Run</button><span class="launch-status" id="nr-run-status"></span></div>
+    </div>
+  `;
+}
+
+function wireSpecDetailLaunchHandlers(specId) {
+  wireHarnessWorkloadSelect('nr-harness', 'nr-workload');
+
+  function target() {
+    return {
+      spec: specId,
+      clusterConfig: document.getElementById('nr-cluster-config').value,
+      namespace: document.getElementById('nr-namespace').value.trim(),
+      dryRun: document.getElementById('nr-dry-run').checked,
+    };
+  }
+  function withWorkload() {
+    return { ...target(), harness: document.getElementById('nr-harness').value, workload: document.getElementById('nr-workload').value };
+  }
+
+  document.getElementById('nr-all-btn').addEventListener('click', () => launchAction('all', withWorkload()));
+  document.getElementById('nr-standup-btn').addEventListener('click', () => launchAction('standup', target()));
+  document.getElementById('nr-teardown-btn').addEventListener('click', () => launchAction('teardown', target()));
+  document.getElementById('nr-run-btn').addEventListener('click', () => launchAction('run', withWorkload()));
+}
+
+function commandLine(verb, t) {
+  const parts = ['llmdbenchmark', verb, '--spec', t.spec, '--cluster-config', t.clusterConfig,
+    '--workspace', 'benchmark/results', '-p', t.namespace || '<namespace>'];
+  if (verb === 'run') parts.push('-l', t.harness || '<harness>', '-w', t.workload || '<workload>');
+  if (t.dryRun && verb !== 'teardown') parts.push('--dry-run');
+  return parts.join(' ');
+}
+function commandPreview(action, t) {
+  if (action === 'all') return ['standup', 'smoketest', 'run'].map(v => commandLine(v, t)).join('\n');
+  return commandLine(action, t);
+}
+
+async function launchAction(action, target, opts = {}) {
+  const prefix = opts.prefix || 'nr';
+  if (!target.namespace) { alert('Namespace is required.'); return; }
+  if ((action === 'run' || action === 'all') && (!target.harness || !target.workload)) { alert('Pick a harness and a workload.'); return; }
+
+  const cmd = commandPreview(action, target);
+  const consequence = action === 'teardown'
+    ? 'This removes real cluster resources. This cannot be undone.'
+    : target.dryRun
+      ? 'Dry run: renders locally, no cluster writes.'
+      : action === 'all'
+        ? 'This creates/modifies real cluster resources, and stops automatically if standup or smoketest fails.'
+        : 'This creates/modifies real cluster resources.';
+  if (!confirm(`Run this against cluster context "${META.kube_context || 'unknown'}"?\n\n${cmd}\n\n${consequence}`)) return;
+
+  const statusEl = document.getElementById(`${prefix}-${action}-status`);
+  statusEl.textContent = 'Launching…';
+  statusEl.className = 'launch-status';
+  try {
+    const res = await fetch('api/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...target }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    statusEl.textContent = data.pid
+      ? `Launched (pid ${data.pid}). It'll show up in Sessions shortly.`
+      : `Launched. Each phase will show up in Sessions as it starts.`;
+    if (opts.afterHash) {
+      setTimeout(() => { location.hash = opts.afterHash; loadManifest(false); }, 2000);
+    } else {
+      setTimeout(() => loadManifest(false), 2000);
+    }
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+    statusEl.className = 'launch-status error';
+  }
+}
+
+async function createSnapshot(exp, statusEl, btn) {
+  statusEl.textContent = 'Capturing…';
+  statusEl.className = 'launch-status';
+  btn.disabled = true;
+  try {
+    const res = await fetch('api/snapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: exp.dir }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    statusEl.textContent = 'Snapshot captured.';
+    setTimeout(() => loadManifest(true), 1200);
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+    statusEl.className = 'launch-status error';
+    btn.disabled = false;
+  }
+}
+
+async function deleteSession(session) {
+  const warning = session.is_latest ? "\n\nNote: this is the 'latest' session -- its symlink will become dangling." : '';
+  if (!confirm(`Permanently delete ${session.id} from disk?\n\nThis removes its logs, plan, and results. It does not affect cluster resources -- run teardown separately if needed. This cannot be undone.${warning}`)) {
+    return;
+  }
+  try {
+    const res = await fetch(resultsUrl(session.id), { method: 'DELETE' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    location.hash = session.scenario_spec ? '#/spec/' + encodeURIComponent(session.scenario_spec) : '#/';
+    await loadManifest(false);
+  } catch (e) {
+    alert('Failed to delete ' + session.id + ': ' + e.message);
+  }
+}
+
+async function loadManifest(preserveScroll) {
+  const scrollY = preserveScroll ? window.scrollY : 0;
+  try {
+    const res = await fetch('index.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    MANIFEST = await res.json();
+    document.getElementById('workspace-info').textContent =
+      `workspace: ${MANIFEST.workspace} · updated ${fmtRelative(MANIFEST.generated_at)}`;
+    render();
+    if (preserveScroll) window.scrollTo(0, scrollY);
+  } catch (e) {
+    document.getElementById('app').innerHTML = `<div class="load-error">
+      Could not load <code>index.json</code> (${esc(e.message)}).<br><br>
+      This page must be served by <code>benchmark/hack/benchmark_report.py serve</code>
+      (or <code>benchmark_report.sh serve</code>) -- opening it directly as a <code>file://</code> URL won't work.
+    </div>`;
+  }
+}
+
+/* ---- system-status strip: current cluster / Prometheus / Grafana, local vs remote ------
+   The cluster's kube context is pinned server-side at startup (see build_cluster_status in
+   benchmark_report.py) so it doesn't drift if `kubectl config use-context` runs elsewhere;
+   `context_drifted` surfaces that instead of silently following it. Prometheus/Grafana each
+   get a port-forward picker (gear icon) backed by GET /api/port-forward/discover, since
+   auto-discovery can miss the right Service or a cluster can have more than one. ---- */
+let SYS_STATUS = null;
+let PF_PANEL_TARGET = null; // 'prometheus' | 'grafana' | null
+const PF_DISCOVERED = {}; // target -> { loading, services, error }
+
+async function loadSystemStatus() {
+  try {
+    const res = await fetch('system-status.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    SYS_STATUS = await res.json();
+  } catch (e) {
+    SYS_STATUS = null;
+  }
+  renderSystemStatus();
+}
+
+function sysChip(label, ok, detail, location, extraHtml) {
+  const tone = ok ? 'good' : 'critical';
+  const locTag = location && location !== 'unknown' ? `<span class="loc">${esc(location)}</span>` : '';
+  return `<span class="sys-chip tone-${tone}" title="${esc(detail)}"><span class="dot"></span>${esc(label)} ${locTag}${extraHtml || ''}</span>`;
+}
+
+function pfGear(target) {
+  return `<button class="pf-gear" type="button" data-target="${target}" title="Configure port-forward">&#9881;</button>`;
+}
+
+function renderSystemStatus() {
+  const mount = document.getElementById('sys-status');
+  if (!mount) return;
+  if (!SYS_STATUS) { mount.innerHTML = ''; renderPfPanel(); return; }
+  const { cluster, prometheus, grafana } = SYS_STATUS;
+
+  const clusterDetail = cluster.context
+    ? `context: ${cluster.context}${cluster.server ? '\n' + cluster.server : ''}${cluster.reachable ? '' : '\n(unreachable)'}`
+      + (cluster.context_drifted ? '\n`kubectl config current-context` has changed since this server started -- restart it to follow that.' : '')
+    : 'No active kube context found (is kubectl/oc on PATH?)';
+  const promDetail = `${prometheus.url}${prometheus.reachable ? '' : ' (unreachable)'}`;
+  const grafanaDetail = `${grafana.url}${grafana.version ? ' (v' + grafana.version + ')' : ''}${grafana.reachable ? '' : ' (unreachable)'}`;
+
+  mount.innerHTML =
+    sysChip('Cluster', cluster.reachable, clusterDetail, cluster.location, cluster.context_drifted ? '<span class="drift-flag" title="Context changed elsewhere">&#9888;</span>' : '') +
+    sysChip('Prometheus', prometheus.reachable, promDetail, prometheus.location, prometheus.port_forward && prometheus.port_forward.supported ? pfGear('prometheus') : '') +
+    sysChip('Grafana', grafana.reachable, grafanaDetail, grafana.location, grafana.port_forward && grafana.port_forward.supported ? pfGear('grafana') : '');
+
+  mount.querySelectorAll('.pf-gear').forEach(btn => {
+    btn.addEventListener('click', () => togglePfPanel(btn.dataset.target));
+  });
+
+  renderPfPanel();
+
+  // The session page's Prometheus link is built from prometheus.url above, which may not
+  // have loaded yet when that page first painted -- backfill it once it has.
+  if (route.view === 'session') {
+    const session = MANIFEST.sessions.find(s => s.id === route.id);
+    if (session) renderSessionObservability(session);
+  }
+}
+
+function togglePfPanel(target) {
+  PF_PANEL_TARGET = (PF_PANEL_TARGET === target) ? null : target;
+  const panel = document.getElementById('pf-panel');
+  if (panel) delete panel.dataset.target; // force a full rebuild for the new target
+  if (PF_PANEL_TARGET && !PF_DISCOVERED[PF_PANEL_TARGET]) discoverServices(PF_PANEL_TARGET);
+  renderPfPanel();
+}
+
+async function discoverServices(target) {
+  PF_DISCOVERED[target] = { loading: true, services: [], error: null };
+  renderPfPanel();
+  try {
+    const res = await fetch(`api/port-forward/discover?target=${encodeURIComponent(target)}`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    PF_DISCOVERED[target] = { loading: false, services: data.services || [], error: null };
+  } catch (e) {
+    PF_DISCOVERED[target] = { loading: false, services: [], error: e.message };
+  }
+  const panel = document.getElementById('pf-panel');
+  if (panel) delete panel.dataset.target; // discovery just landed -- rebuild the select
+  renderPfPanel();
+}
+
+// Rebuilds the picker form only when it's freshly opened or discovery just landed (tracked
+// via panel.dataset.target); a periodic system-status poll just patches the live bits
+// (start/stop buttons, status line) so it doesn't wipe out a namespace/service the operator
+// is mid-typing into the manual override fields.
+function renderPfPanel() {
+  const panel = document.getElementById('pf-panel');
+  if (!panel) return;
+  if (!PF_PANEL_TARGET || !SYS_STATUS) {
+    panel.className = 'pf-panel hidden';
+    panel.innerHTML = '';
+    delete panel.dataset.target;
+    return;
+  }
+  const target = PF_PANEL_TARGET;
+  const pf = SYS_STATUS[target].port_forward;
+
+  if (panel.dataset.target === target && document.getElementById('pf-ns')) {
+    document.getElementById('pf-start-btn').disabled = !!(pf && pf.active);
+    document.getElementById('pf-stop-btn').disabled = !(pf && pf.active);
+    const statusEl = document.getElementById('pf-status');
+    if (pf && pf.active) statusEl.textContent = `Forwarding ${pf.namespace}/${pf.service} → localhost:${pf.local_port}`;
+    else if (pf && pf.error) statusEl.textContent = 'Failed: ' + pf.error;
+    return;
+  }
+
+  panel.dataset.target = target;
+  panel.className = 'pf-panel';
+  const discovered = PF_DISCOVERED[target] || { loading: true, services: [] };
+  const services = discovered.services || [];
+  const optionsHtml = services
+    .map(s => `<option value="${esc(s.namespace)}|${esc(s.name)}|${s.port}" ${s.caution ? `title="${esc(s.caution)}"` : ''}>${s.caution ? '⚠ ' : ''}${esc(s.namespace)}/${esc(s.name)}:${s.port}</option>`)
+    .join('');
+  const pickerHtml = discovered.loading
+    ? `<span class="hint">Discovering ${esc(target)} services…</span>`
+    : discovered.error
+      ? `<span class="hint" style="color:var(--status-critical)">${esc(discovered.error)}</span>`
+      : optionsHtml
+        ? `<select id="pf-svc-select">${optionsHtml}</select>`
+        : `<span class="hint">No ${esc(target)} Service auto-detected — enter one manually.</span>`;
+
+  const active = pf && pf.active;
+  const currentNs = (pf && pf.namespace) || '';
+  const currentSvc = (pf && pf.service) || '';
+  const currentPort = (pf && pf.remote_port) || (target === 'prometheus' ? 9090 : 3000);
+
+  panel.innerHTML = `
+    <span class="pf-panel-title">${target === 'prometheus' ? 'Prometheus' : 'Grafana'} port-forward</span>
+    ${pickerHtml}
+    <span class="pf-manual">
+      <input type="text" id="pf-ns" placeholder="namespace" value="${esc(currentNs)}">
+      <input type="text" id="pf-svc" placeholder="service" value="${esc(currentSvc)}">
+      <input type="number" id="pf-port" placeholder="port" value="${currentPort}">
+    </span>
+    <button class="btn primary" id="pf-start-btn" type="button" ${active ? 'disabled' : ''}>Start</button>
+    <button class="btn danger" id="pf-stop-btn" type="button" ${active ? '' : 'disabled'}>Stop</button>
+    <button class="btn" id="pf-refresh-btn" type="button">Re-scan</button>
+    <button class="btn" id="pf-close-btn" type="button">Close</button>
+    <span class="launch-status" id="pf-status">${active ? `Forwarding ${esc(currentNs)}/${esc(currentSvc)} → localhost:${pf.local_port}` : (pf && pf.error ? 'Failed: ' + esc(pf.error) : '')}</span>
+    <div class="pf-caution hidden" id="pf-caution" style="flex-basis:100%"></div>
+  `;
+
+  function updateCaution(namespace, name) {
+    const match = services.find(s => s.namespace === namespace && s.name === name);
+    const el = document.getElementById('pf-caution');
+    if (match && match.caution) {
+      el.textContent = '⚠ ' + match.caution;
+      el.className = 'hint';
+      el.style.color = 'var(--status-warning)';
+    } else {
+      el.textContent = '';
+      el.className = 'hidden';
+    }
+  }
+
+  const select = document.getElementById('pf-svc-select');
+  if (select) {
+    select.addEventListener('change', () => {
+      const [ns, svc, port] = select.value.split('|');
+      document.getElementById('pf-ns').value = ns;
+      document.getElementById('pf-svc').value = svc;
+      document.getElementById('pf-port').value = port;
+      updateCaution(ns, svc);
+    });
+    if (!currentSvc) select.dispatchEvent(new Event('change'));
+    else updateCaution(currentNs, currentSvc);
+  }
+
+  document.getElementById('pf-start-btn').addEventListener('click', () => startPortForward(target));
+  document.getElementById('pf-stop-btn').addEventListener('click', () => stopPortForward(target));
+  document.getElementById('pf-refresh-btn').addEventListener('click', () => discoverServices(target));
+  document.getElementById('pf-close-btn').addEventListener('click', () => { PF_PANEL_TARGET = null; renderPfPanel(); });
+}
+
+async function startPortForward(target) {
+  const namespace = document.getElementById('pf-ns').value.trim();
+  const service = document.getElementById('pf-svc').value.trim();
+  const port = Number(document.getElementById('pf-port').value);
+  const statusEl = document.getElementById('pf-status');
+  if (!namespace || !service || !port) { statusEl.textContent = 'Namespace, service, and port are required.'; return; }
+  statusEl.textContent = 'Starting…';
+  try {
+    const res = await fetch('api/port-forward/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, namespace, service, port }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    statusEl.textContent = `Forwarding ${namespace}/${service} → localhost:${data.local_port}`;
+    setTimeout(loadSystemStatus, 800);
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+async function stopPortForward(target) {
+  const statusEl = document.getElementById('pf-status');
+  statusEl.textContent = 'Stopping…';
+  try {
+    const res = await fetch('api/port-forward/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    statusEl.textContent = 'Stopped.';
+    setTimeout(loadSystemStatus, 400);
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+function wireTheme() {
+  const btn = document.getElementById('theme-toggle');
+  const cycle = ['auto', 'light', 'dark'];
+  let i = 0;
+  btn.addEventListener('click', () => {
+    i = (i + 1) % cycle.length;
+    const mode = cycle[i];
+    if (mode === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', mode);
+    btn.textContent = 'Theme: ' + mode[0].toUpperCase() + mode.slice(1);
+  });
+}
+
+function wireAutoRefresh() {
+  const checkbox = document.getElementById('auto-refresh');
+  let statusTimer = null;
+  function apply() {
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    if (statusTimer) clearInterval(statusTimer);
+    if (checkbox.checked) {
+      autoRefreshTimer = setInterval(() => loadManifest(true), 8000);
+      statusTimer = setInterval(loadSystemStatus, 15000);
+    }
+  }
+  checkbox.addEventListener('change', apply);
+  apply();
+}
+
+/* ---- init ---------------------------------------------------------------------- */
+route = parseHash();
+document.getElementById('refresh-btn').addEventListener('click', () => { loadManifest(true); loadSystemStatus(); });
+wireTheme();
+wireAutoRefresh();
+loadManifest(false);
+loadSystemStatus();
+</script>
+</body>
+</html>

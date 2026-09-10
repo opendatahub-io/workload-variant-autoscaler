@@ -31,17 +31,34 @@ gpu.cluster
 llm-d/
 llm-d-infra/
 llm-d-benchmark/
+benchmark/hack/.venv/
+benchmark/hack/.port-forward-state.json
 # llmdbenchmark workspace directories (created by benchmark runs)
 *-*-*-*-*-*/
 biran-*/
 llmd/
 llmd-infra/
 
+# Per-session kubeconfig (embeds a live cluster token) and raw setup command
+# capture logs (which duplicate that token via `oc config view`) -- never
+# commit these, unlike the rest of benchmark/results/.
+benchmark/results/*/environment/
+benchmark/results/*/setup/commands/
+benchmark/results/*/logs/
+benchmark/results/*/plan/
+
 *.tgz
 actionlint
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 # Generated TLS certificates (auto-created by e2e test setup)
 hack/tls-certs/
 
 # AI
 .claude/worktrees/
+.envrc
