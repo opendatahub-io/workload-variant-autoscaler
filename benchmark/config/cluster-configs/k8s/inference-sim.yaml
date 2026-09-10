@@ -1,0 +1,109 @@
+# BACKEND OVERLAY — llm-d-inference-sim (fake HTTP server, no GPU)
+# Apply with: --cluster-config benchmark/config/cluster-configs/k8s/inference-sim.yaml
+#
+# Lowest-priority backend. Serves any model name without weights; the sim binary
+# handles its own argv (vllm.modelCommand: imageDefault). Recent sim releases
+# emit vllm:-prefixed Prometheus metrics, so the scenario's native-metric KEDA
+# strategy applies unchanged.
+#
+# Merge note: dicts deep-merge, lists replace wholesale. This overlay sets
+# `keda.prometheus` (connection/auth only) for OpenShift clusters — see below.
+# `keda.scaledObjects` (triggers/thresholds, scaleTargetRef.kind) still comes
+# from the scenario.
+#
+# KEDA PROMETHEUS AUTH (OpenShift): there is no `monitoring` namespace on
+# this cluster, and direct Prometheus access requires bearer-token auth
+# anyway, so triggers go through the Thanos Querier route instead (same
+# pattern already proven by the EPP+KEDA saturation path). The ServiceAccount
+# + ClusterRoleBinding below grant it read access to Thanos; the
+# `prometheus-auth` Secret (keys: bearerToken, ca.crt) they authenticate with
+# is NOT created here — KEDA's generic-scaledObjects path treats it as
+# user-supplied (see 27a_keda-triggerauthentication.yaml.j2 in llm-d-benchmark).
+# Create it once per namespace after standup:
+#   oc create token wva-prometheus-auth -n <namespace> --duration=24h > /tmp/tok
+#   oc get cm openshift-service-ca.crt -n <namespace> \
+#     -o jsonpath='{.data.service-ca\.crt}' > /tmp/ca.crt
+#   oc create secret generic prometheus-auth -n <namespace> \
+#     --from-file=ca.crt=/tmp/ca.crt --from-literal=bearerToken="$(cat /tmp/tok)"
+keda:
+  prometheus:
+    baseUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local
+    port: 9091
+    authMode: bearer-secret
+    secretName: prometheus-auth
+
+extraObjects:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: wva-prometheus-auth
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: allow-thanos-querier-api-access-${namespace.name}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: allow-thanos-querier-api-access
+    subjects:
+      - kind: ServiceAccount
+        name: wva-prometheus-auth
+        namespace: ${namespace.name}
+
+# CPU-only nodes, no GPU
+affinity:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+
+accelerator:
+  count: 0
+  memory: 24
+
+model:
+  gpuMemoryUtilization: 0
+
+images:
+  vllm:
+    repository: ghcr.io/llm-d/llm-d-inference-sim
+    tag: latest
+
+decode:
+  accelerator:
+    count: 0
+  resources:
+    limits:
+      memory: 256Mi
+      cpu: "500m"
+    requests:
+      memory: 256Mi
+      cpu: "100m"
+  vllm:
+    modelCommand: imageDefault
+    additionalFlags:
+    - "--prefill-time-per-token=200ms"
+    - "--prefill-time-std-dev=3ms"
+    - "--enable-kvcache=true"
+    - "--max-model-len=8192"
+    - "--kv-cache-size=16384"
+    - "--force-dummy-tokenizer=true"
+
+prefill:
+  accelerator:
+    count: 0
+  resources:
+    limits:
+      memory: 256Mi
+      cpu: "500m"
+    requests:
+      memory: 256Mi
+      cpu: "100m"
+  vllm:
+    modelCommand: imageDefault
+    additionalFlags:
+    - "--prefill-time-per-token=200ms"
+    - "--prefill-time-std-dev=3ms"
+    - "--enable-kvcache=true"
+    - "--max-model-len=8192"
+    - "--kv-cache-size=16384"
+    - "--force-dummy-tokenizer=true"
