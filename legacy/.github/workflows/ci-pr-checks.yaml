@@ -82,7 +82,7 @@ jobs:
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.10.0
+          version: v2.13.2
           args: ""
 
       - name: Run make build
