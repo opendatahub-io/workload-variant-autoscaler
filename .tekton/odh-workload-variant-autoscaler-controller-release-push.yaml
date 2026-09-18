@@ -27,7 +27,7 @@ spec:
   - name: dockerfile
     value: Dockerfile.konflux
   - name: path-context
-    value: .
+    value: legacy
   pipelineRef:
     resolver: git
     params:
