@@ -62,7 +62,7 @@ require (
 	github.com/go-openapi/swag v0.23.1 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/cel-go v0.26.0 // indirect
+	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0
 	github.com/google/pprof v0.0.0-20260115054156-294ebfa9ad83 // indirect
@@ -82,7 +82,6 @@ require (
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/spf13/cobra v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10
-	github.com/stoewer/go-strcase v1.3.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.63.0 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect
