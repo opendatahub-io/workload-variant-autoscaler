@@ -86,7 +86,7 @@ jobs:
 
       - name: Check for code changes
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         id: filter
         with:
           predicate-quantifier: 'every'
